@@ -1,0 +1,29 @@
+# Copy examples/ into scenarios/ and flows/ (git-ignored), then edit for your target.
+scenario:
+  id: home-loads
+  version: 1
+  title: Home page renders its navigation and no request fails with 5xx
+  class: P0
+  mutation: read-only
+
+covers:
+  feature: home-page
+  capability: app.home
+  routes: [/]
+
+uses:
+  - open-home
+
+steps:
+  - use_flow: open-home
+  - assert_visible: { by: css, value: "nav, header" }
+  - assert_url: { contains: "/" }
+
+assert:
+  no_http_5xx: true
+  no_uncaught_console_error: true
+
+oracle:
+  source: contract
+  source_feature: home-page
+  note: "the deployed home page must always serve its navigation"

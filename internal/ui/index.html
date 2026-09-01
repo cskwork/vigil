@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>검증 결과, QA 현황판</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="/ui/theme.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" aria-label="주 메뉴">
+    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <a href="/" class="active">검증 결과</a>
+    <a href="/scripts">검사 스크립트</a>
+    <a href="/activity">시스템 활동</a>
+    <div class="rail-foot">
+      <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
+      <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
+    </div>
+  </nav>
+  <div class="content">
+    <header class="topbar">
+      <div class="crumbs">QA 현황판 &rsaquo; <b>검증 결과</b></div>
+      <div class="search"><input type="search" id="q" placeholder="검사 항목 검색" aria-label="검사 항목 검색"></div>
+      <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
+    </header>
+    <main>
+      <div id="fetchErr"></div>
+      <section aria-label="요약">
+        <div class="kpis" id="kpis">
+          <article class="kpi north"><h3>서비스 상태</h3><div class="value"><div class="skel" style="width:60%"></div></div><p class="delta">불러오는 중</p></article>
+          <article class="kpi"><h3>이 배포에서 검증</h3><div class="skel"></div></article>
+          <article class="kpi"><h3>아직 검증 안 됨</h3><div class="skel"></div></article>
+          <article class="kpi"><h3>마지막 검증</h3><div class="skel"></div></article>
+          <article class="kpi"><h3>배포 확인 시각</h3><div class="skel"></div></article>
+        </div>
+      </section>
+
+      <section class="panel" id="issues" aria-label="발견된 문제"><div class="body" id="issuesBody"></div></section>
+
+      <section class="panel" id="verify" aria-label="이 배포에서 검증한 것">
+        <header><h2>이 배포에서 검증한 것</h2><p>검사 항목마다 마지막 실행 결과와 증거</p></header>
+        <div class="deploy-head" id="deployHead"><div class="skel" style="width:40%"></div></div>
+        <div class="body">
+          <table>
+            <thead><tr><th>검사 항목</th><th>결과</th><th class="hide-sm">증거</th><th class="hide-sm">검증 시각</th><th class="num hide-sm">소요</th></tr></thead>
+            <tbody id="checks"><tr><td colspan="5"><div class="skel"></div><div class="skel"></div></td></tr></tbody>
+          </table>
+          <div class="legend" id="legend"></div>
+        </div>
+      </section>
+
+      <section class="panel" id="requests" aria-label="수동 QA 요청" hidden>
+        <header><h2>수동 QA 요청</h2><p>사람이 적어 넘긴 검증 요청을 AI 도우미가 수행한 결과와 증거</p></header>
+        <div class="body" id="requestsBody"></div>
+      </section>
+
+      <section class="panel" id="deploys" aria-label="배포 이력">
+        <header><h2>배포 이력</h2><p>배포 마커별 검증 요약. 줄을 누르면 그 배포의 결과를 봅니다</p></header>
+        <div class="body">
+          <table>
+            <thead><tr><th>배포</th><th class="hide-sm">처음 확인</th><th>마지막 검증</th><th class="num">검사 / 정상</th><th class="num hide-sm">항목</th></tr></thead>
+            <tbody id="deployRows"><tr><td colspan="5"><div class="skel"></div></td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const prefs = { dev: localStorage.getItem('vigil.dev') === '1', density: localStorage.getItem('vigil.density') || 'comfortable' };
+$('devmode').checked = prefs.dev; document.body.classList.toggle('devmode', prefs.dev);
+$('density').value = prefs.density; document.body.classList.toggle('compact', prefs.density === 'compact');
+$('devmode').onchange = (e) => { localStorage.setItem('vigil.dev', e.target.checked ? '1' : '0'); document.body.classList.toggle('devmode', e.target.checked); };
+$('density').onchange = (e) => { localStorage.setItem('vigil.density', e.target.value); document.body.classList.toggle('compact', e.target.value === 'compact'); };
+
+const OUTCOME = { PASS: ['정상', 'ok'], APP_FAILURE: ['서비스 문제', 'bad'], QA_FLAKE: ['일시 오류, 재검사 정상', 'warn'], SCRIPT_DRIFT: ['화면이 바뀜, 검사 수정 필요', 'warn'],
+  LIGHTPANDA_INCOMPATIBLE: ['다른 브라우저로 재확인', 'info'], BROWSER_AMBIGUOUS: ['재확인 필요', 'info'], AUTH_FAILURE: ['로그인 문제', 'warn'], DATA_FAILURE: ['데이터 문제', 'warn'],
+  ENV_FAILURE: ['검사 환경 문제', 'warn'], DEPLOYMENT_NOT_READY: ['배포 대기', 'muted'], ORACLE_UNKNOWN: ['판단 기준 불명확', 'warn'], NEEDS_REVIEW: ['사람 확인 필요', 'warn'] };
+const CLASS = { P0: '매우 중요', P1: '중요', P2: '보통' };
+const BROWSER = { lightpanda: '가벼운 브라우저', chromium: 'Chromium' };
+const STEP = { goto: '페이지 이동', click: '클릭', fill: '입력', type: '입력', press: '키 입력', select: '선택', hover: '마우스 올리기', wait_for: '화면 표시 기다림', wait_ms: '잠시 기다림', wait_url: '주소 변경 기다림',
+  assert_text: '문구 확인', assert_no_text: '문구 없음 확인', assert_visible: '표시 확인', assert_not_visible: '숨김 확인', assert_url: '주소 확인', assert_count: '개수 확인', assert_request: '서버 응답 확인', assert_attr: '상태 확인', expect_popup: '새 탭 열림 확인', eval: '값 확인', use_flow: '공통 절차', screenshot: '화면 캡처' };
+const st = (map, v, fallback) => { const m = map[v]; if (!v && !fallback) return ''; return `<span class="st st-${m ? m[1] : 'muted'}"><i></i>${esc(m ? m[0] : (v || fallback))}</span>`; };
+const dev = (s) => `<span class="dev mono">${esc(s)}</span>`;
+const T = (s) => s ? new Date(s.replace(' ', 'T')) : null;
+function ago(s) { const d = T(s); if (!d) return ''; const sec = (Date.now() - d) / 1000; if (sec < 60) return '방금'; if (sec < 3600) return `${Math.floor(sec / 60)}분 전`; if (sec < 86400) return `${Math.floor(sec / 3600)}시간 전`; return `${Math.floor(sec / 86400)}일 전`; }
+const hm = (s) => s ? s.slice(11, 16) : '';
+const secs = (ms) => (ms / 1000).toFixed(1) + '초';
+const markerLabel = (m) => { const n = Number(m); return isFinite(n) && n > 1e12 ? `배포 ${new Date(n).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} 빌드` : `배포 ${m}`; };
+
+let data = null, marker = new URLSearchParams(location.search).get('marker') || '', openRow = null, tab = 'steps', query = '';
+$('q').oninput = (e) => { query = e.target.value.trim().toLowerCase(); render(); };
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/verification' + (marker ? '?marker=' + encodeURIComponent(marker) : ''), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    data = await r.json(); marker = data.marker || '';
+    $('fetchErr').innerHTML = ''; $('live').classList.remove('off');
+    $('freshText').textContent = '실시간 갱신 ' + new Date(data.now).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    $('brandTarget').textContent = data.target.replace(/^https?:\/\//, '');
+    render();
+  } catch (e) {
+    $('live').classList.add('off'); $('freshText').textContent = '갱신 실패';
+    $('fetchErr').innerHTML = `<div class="errbox"><span>현황 서버에 연결하지 못했습니다 (${esc(e.message)}).</span><button class="btn" onclick="refresh()">다시 시도</button></div>`;
+  }
+}
+
+function render() {
+  const o = data; if (!o) return;
+  const checks = o.checks || [], deps = o.deployments || [], incs = o.incidents || [];
+  const verified = checks.filter(c => !c.not_verified), pass = verified.filter(c => c.outcome === 'PASS' || c.outcome === 'QA_FLAKE');
+  const failing = verified.filter(c => c.outcome === 'APP_FAILURE'), infra = verified.filter(c => ['ENV_FAILURE', 'AUTH_FAILURE', 'DATA_FAILURE'].includes(c.outcome));
+  const dep = deps.find(d => d.marker === marker);
+  const last = verified.map(c => c.finished_at).sort().reverse()[0];
+  let tone = 'idle', head = '검증 결과 없음', sub = '아직 이 배포에서 실행된 검사가 없습니다.';
+  if (incs.length || failing.length) { tone = 'bad'; head = '문제 있음'; sub = `${incs.length || failing.length}건이 약속과 다르게 동작했습니다.`; }
+  else if (verified.length && infra.length) { tone = 'warn'; head = '검사 환경 문제'; sub = `${infra.length}건은 서비스가 아니라 검사 환경(네트워크/로그인) 문제입니다.`; }
+  else if (verified.length && pass.length === verified.length) { tone = 'ok'; head = '정상'; sub = `검증한 ${verified.length}개 항목 모두 약속대로 동작했습니다.`; }
+  else if (verified.length) { tone = 'warn'; head = '확인 필요'; sub = `${verified.length - pass.length}건은 재확인이나 검사 수정이 필요합니다.`; }
+  $('kpis').innerHTML = `
+    <article class="kpi north ${tone}"><h3>서비스 상태</h3><div class="value">${st({ ok: [head, 'ok'], bad: [head, 'bad'], warn: [head, 'warn'], idle: [head, 'muted'] }, tone)}</div><p class="delta">${esc(sub)}</p></article>
+    <article class="kpi"><h3>이 배포에서 검증</h3><div class="value">${pass.length}<small>/ ${verified.length} 정상</small></div><p class="delta">검사 항목 ${checks.length}개 중</p></article>
+    <article class="kpi"><h3>아직 검증 안 됨</h3><div class="value">${checks.length - verified.length}</div><p class="delta">${checks.length - verified.length ? '정해진 주기에 자동 실행됩니다' : '모든 항목이 이 배포에서 실행됨'}</p></article>
+    <article class="kpi"><h3>마지막 검증</h3><div class="value">${last ? hm(last) : '<small>없음</small>'}</div><p class="delta">${last ? ago(last) : ''}</p></article>
+    <article class="kpi"><h3>배포 확인 시각</h3><div class="value">${dep ? hm(dep.first_seen) : '<small>없음</small>'}</div><p class="delta">${dep ? esc(dep.first_seen.slice(0, 10)) + ' · 검사 ' + dep.runs + '회' : ''}</p></article>`;
+
+  $('issuesBody').innerHTML = incs.length ? `<div class="agent-head"><b>발견된 문제 ${incs.length}건</b></div><table><tbody>${incs.map(i => `<tr><td class="t">${i.md_rel ? `<a href="/evidence/${esc(i.md_rel)}" target="_blank" rel="noopener">${esc(i.title)}</a>` : esc(i.title)}</td><td>${st({ ENVIRONMENT: ['검사 환경 문제', 'warn'], APP_REGRESSION: ['서비스 결함 의심', 'bad'] }, i.kind)}</td><td class="hide-sm">${esc(i.created_at)}</td></tr>`).join('')}</tbody></table>`
+    : `<div class="empty" style="padding:8px 0"><b>확인된 문제가 없습니다</b>문제가 확인되면 재현 절차와 증거가 여기에 정리됩니다.</div>`;
+
+  $('deployHead').innerHTML = marker ? `<span>${esc(markerLabel(marker))}</span><span class="mk">${esc(marker)}</span>${dep ? `<span class="sub">처음 확인 ${esc(dep.first_seen)} · 마지막 검증 ${esc(dep.last_seen)}</span>` : ''}<div class="actions"><a class="btn" href="/report?marker=${encodeURIComponent(marker)}" target="_blank" rel="noopener">리포트 열기</a><button class="btn primary" id="copyMd">Markdown 복사</button></div>`
+    : '<span class="sub">아직 배포 마커가 기록된 검사가 없습니다.</span>';
+  const cm = $('copyMd'); if (cm) cm.onclick = copyMarkdown;
+
+  const vis = checks.filter(c => !query || (c.title || '').toLowerCase().includes(query) || c.scenario_id.toLowerCase().includes(query));
+  $('checks').innerHTML = vis.length ? vis.map(c => {
+    const ev = c.not_verified ? '<span class="sub">없음</span>' : `<span class="evi"><span class="${c.screenshot ? 'has' : ''}">화면 캡처</span><span class="${c.steps ? 'has' : ''}">단계 ${c.steps}</span><span class="${c.requests ? 'has' : ''}">서버 응답 ${c.requests}</span>${c.console_errors ? `<span class="has">콘솔 오류 ${c.console_errors}</span>` : ''}</span>`;
+    const why = !c.not_verified && c.outcome !== 'PASS' ? `<div class="sub">${c.failed_step ? `${c.failed_step}단계 "${esc(STEP[c.failed_action] || c.failed_action)}"에서 멈춤: ${esc(c.actual || c.error)}` : esc(c.error)}</div>` : '';
+    const row = `<tr class="${c.not_verified ? '' : 'click'}${openRow === c.scenario_id ? ' sel' : ''}" data-id="${esc(c.scenario_id)}" data-dir="${esc(c.evidence_rel)}"><td><div class="t">${esc(c.title || c.scenario_id)}</div><div class="sub">${esc(CLASS[c.class] || c.class)}${c.browser ? ` · ${esc(BROWSER[c.browser] || c.browser)}` : ''} ${dev(c.scenario_id + (c.version ? ' v' + c.version : '') + (c.run_id ? ' run#' + c.run_id : ''))}</div>${why}</td><td class="st-cell">${c.not_verified ? st({ x: ['이 배포에서 미실행', 'muted'] }, 'x') : st(OUTCOME, c.outcome)}</td><td class="hide-sm">${ev}</td><td class="hide-sm when">${c.finished_at ? hm(c.finished_at) + `<div class="sub">${ago(c.finished_at)}</div>` : ''}</td><td class="num hide-sm">${c.duration_ms ? secs(c.duration_ms) : ''}</td></tr>`;
+    const det = openRow === c.scenario_id ? `<tr><td colspan="5"><div class="tabs">${[['steps', '단계'], ['shots', '화면 캡처'], ['net', '서버 응답'], ['console', '콘솔']].map(([k, l]) => `<button class="${tab === k ? 'active' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="detail"><div class="skel"></div></div><p class="sub dev">증적: <a href="/evidence/${esc(c.evidence_rel)}/" target="_blank" rel="noopener">${esc(c.evidence_rel)}</a></p></td></tr>` : '';
+    return row + det;
+  }).join('') : `<tr><td colspan="5" class="empty"><b>${query ? '검색 결과가 없습니다' : '검사 항목이 없습니다'}</b></td></tr>`;
+  document.querySelectorAll('#checks tr.click').forEach(tr => tr.onclick = () => { openRow = openRow === tr.dataset.id ? null : tr.dataset.id; render(); });
+  document.querySelectorAll('.tabs button').forEach(b => b.onclick = (e) => { e.stopPropagation(); tab = b.dataset.tab; render(); });
+  const open = checks.find(c => c.scenario_id === openRow); if (open && $('detail')) loadDetail(open.evidence_rel);
+  $('legend').innerHTML = `${st(OUTCOME, 'PASS')} 약속대로 동작 &nbsp; ${st(OUTCOME, 'APP_FAILURE')} 약속과 다르게 동작, 개발팀 확인 &nbsp; ${st(OUTCOME, 'SCRIPT_DRIFT')} 화면 구조가 바뀌어 검사 수정 &nbsp; ${st(OUTCOME, 'ENV_FAILURE')} 검사 환경 문제`;
+
+  renderRequests();
+  $('deployRows').innerHTML = deps.length ? deps.map(d => `<tr class="click${d.marker === marker ? ' sel' : ''}" data-marker="${esc(d.marker)}"><td><div class="t">${esc(markerLabel(d.marker))}</div><div class="sub mono">${esc(d.marker)}</div></td><td class="hide-sm">${esc(d.first_seen)}</td><td>${esc(d.last_seen)}<div class="sub">${ago(d.last_seen)}</div></td><td class="num">${d.runs} / ${d.passes}</td><td class="num hide-sm">${d.scenarios}</td></tr>`).join('')
+    : `<tr><td colspan="5" class="empty"><b>배포 이력이 없습니다</b>배포 마커(assets/index.js?v=)가 확인되면 기록됩니다.</td></tr>`;
+  document.querySelectorAll('#deployRows tr.click').forEach(tr => tr.onclick = () => { marker = tr.dataset.marker; openRow = null; history.replaceState(null, '', '?marker=' + encodeURIComponent(marker)); refresh(); });
+}
+
+let reqData = null, reqOpen = null;
+async function renderRequests() {
+  try {
+    if (!reqData || Date.now() - reqData._at > 10000) { const r = await fetch('/api/requests', { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status); reqData = await r.json(); reqData._at = Date.now(); }
+  } catch (e) { return; }
+  const list = reqData.requests || [];
+  const sec = $('requests'); sec.hidden = !list.length; if (!list.length) return;
+  const D = { NEW_SCRIPT: ['새 검사 항목 제안', 'ok'], PATCH_SCRIPT: ['검사 수리안 제안', 'ok'], APP_FAILURE: ['서비스 문제 발견', 'bad'], NO_NEW_COVERAGE: ['추가할 검사 없음', 'muted'], NEEDS_REVIEW: ['사람 확인 필요', 'warn'], ORACLE_UNKNOWN: ['판단 기준 불명확', 'warn'] };
+  const S = { running: ['진행 중', 'ok'], done: ['완료', 'muted'], stale: ['응답 없음', 'warn'], none: ['미실행', 'muted'] };
+  $('requestsBody').innerHTML = list.map(q => `
+    <div class="check" style="padding:12px 0;border-bottom:1px solid var(--line)">
+      <div class="agent-head"><b>${esc(q.summary || q.feature_id)}</b>${st(S, q.status)}${q.decision ? st(D, q.decision) : ''}<span class="sub">${esc(q.requested_at)}${q.duration ? ` · ${esc(q.duration)}` : ''}${q.tool_calls ? ` · 브라우저 조작 ${q.tool_calls}회` : ''}${q.candidates ? ` · 제안 스크립트 ${q.candidates}개` : ''}</span><button class="btn" data-req="${esc(q.feature_id)}" style="margin-left:auto">${reqOpen === q.feature_id ? '접기' : '결과 보기'}</button></div>
+      ${reqOpen === q.feature_id ? `
+        ${q.reason ? `<p class="sub">${esc(q.reason)}</p>` : ''}
+        ${q.evidence ? `<div class="msg">${esc(q.evidence)}</div>` : '<div class="empty">아직 결과 텍스트가 없습니다.</div>'}
+        ${(q.screenshots || []).length ? `<div class="shots">${q.screenshots.map(s => `<figure><a href="/evidence/${esc(s)}" target="_blank" rel="noopener"><img src="/evidence/${esc(s)}" alt="요청 수행 화면" loading="lazy"></a><figcaption>${esc(s.split('/').pop())}</figcaption></figure>`).join('')}</div>` : ''}
+        ${q.gate ? `<details class="dev"><summary class="sub">후보 검증 결과(gate.json)</summary><pre class="yaml">${esc(q.gate)}</pre></details>` : ''}
+        <p class="sub dev">증적 폴더: <a href="/evidence/${esc(q.dir)}/" target="_blank" rel="noopener">${esc(q.dir)}</a></p>` : ''}
+    </div>`).join('');
+  document.querySelectorAll('#requestsBody button[data-req]').forEach(b => b.onclick = () => { reqOpen = reqOpen === b.dataset.req ? null : b.dataset.req; renderRequests(); });
+}
+
+const detailCache = {};
+async function loadDetail(dir) {
+  const el = $('detail'); if (!el) return;
+  try {
+    if (!detailCache[dir]) { const r = await fetch('/api/run/detail?dir=' + encodeURIComponent(dir), { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status); detailCache[dir] = await r.json(); }
+    const d = detailCache[dir];
+    if (tab === 'steps') {
+      const steps = (d.steps && d.steps.steps) || [];
+      const flowOf = (n) => { const m = /^flow:([^/]+)\//.exec(n || ''); return m ? m[1] : ''; };
+      el.innerHTML = `<div class="steps">${steps.map(x => { const flow = flowOf(x.name); const detail = x.ok ? (x.expected || x.actual || '') : [x.expected ? `기대: ${x.expected}` : '', x.actual ? `실제: ${x.actual}` : '', x.error || ''].filter(Boolean).join(' / ');
+        return `<div class="step"><span class="n">${x.index}</span>${st({ ok: ['성공', 'ok'], fail: ['실패', 'bad'] }, x.ok ? 'ok' : 'fail')}<span><b>${esc(STEP[x.kind] || x.kind)}</b>${flow ? ` <span class="sub">공통 절차 ${esc(flow)}</span>` : ''} ${dev(x.name || x.kind)}<div class="how">${esc(detail)}</div></span></div>`; }).join('') || '<div class="empty">기록된 단계가 없습니다.</div>'}</div>`;
+    } else if (tab === 'shots') {
+      const lp = (d.steps && d.steps.browser) === 'lightpanda';
+      el.innerHTML = ((d.screenshots || []).length ? `${lp ? '<div class="sub" style="padding:0 0 8px">가벼운 브라우저는 화면을 그리지 않아 이 캡처는 텍스트 렌더링입니다. 실제 화면은 Chromium 실행의 캡처를 보세요.</div>' : ''}<div class="shots">${d.screenshots.map(s => `<figure><a href="/evidence/${esc(s)}" target="_blank" rel="noopener"><img src="/evidence/${esc(s)}" alt="검증 당시 화면" loading="lazy"></a><figcaption>${esc(s.split('/').pop())}</figcaption></figure>`).join('')}</div>` : '<div class="empty"><b>화면 캡처가 없습니다</b>이 실행은 캡처를 지원하지 않는 브라우저에서 돌았거나 이전 버전에서 기록되었습니다.</div>');
+    } else if (tab === 'net') {
+      const rows = d.network || [];
+      el.innerHTML = `<div class="sub" style="padding:4px 0 8px">전체 요청 ${d.network_total || 0}건 중 문서·API·오류 ${rows.length}건 (정상 정적 파일은 생략)</div>` + (rows.length ? `<table class="net"><thead><tr><th>방식</th><th class="num">상태</th><th>주소</th></tr></thead><tbody>${rows.map(n => `<tr><td>${esc(n.method)}</td><td class="num">${n.failed ? st({ x: ['실패', 'bad'] }, 'x') : (n.status >= 400 ? st({ x: [String(n.status), 'bad'] }, 'x') : n.status || '-')}</td><td class="url">${esc(n.url)}${n.error ? ` <span class="sub">${esc(n.error)}</span>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">기록된 요청이 없습니다.</div>');
+    } else {
+      const rows = d.console || [];
+      el.innerHTML = rows.length ? `<table><thead><tr><th>수준</th><th>메시지</th></tr></thead><tbody>${rows.map(c => `<tr><td>${st({ error: ['오류', 'bad'], exception: ['예외', 'bad'], warn: ['경고', 'warn'], warning: ['경고', 'warn'], log: ['로그', 'muted'] }, c.level)}</td><td class="mono" style="background:none;padding:0;white-space:pre-wrap">${esc(c.text)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty"><b>브라우저 콘솔 오류가 없습니다</b></div>';
+    }
+  } catch (e) { el.innerHTML = `<div class="errbox"><span>증거를 불러오지 못했습니다 (${esc(e.message)})</span><button class="btn" onclick="delete detailCache['${esc(dir)}'];render()">다시 시도</button></div>`; }
+}
+
+function toMarkdown() {
+  const o = data, checks = o.checks || [], dep = (o.deployments || []).find(d => d.marker === marker);
+  const L = [];
+  L.push(`# QA 검증 결과: ${o.target}`);
+  L.push(`- 배포 마커: \`${marker}\`${dep ? ` (처음 확인 ${dep.first_seen}, 마지막 검증 ${dep.last_seen})` : ''}`);
+  const v = checks.filter(c => !c.not_verified), p = v.filter(c => c.outcome === 'PASS' || c.outcome === 'QA_FLAKE');
+  L.push(`- 결과: ${p.length}/${v.length} 정상, 미실행 ${checks.length - v.length}, 미해결 문제 ${(o.incidents || []).length}건`);
+  L.push(`- 생성: ${new Date().toLocaleString('ko-KR')}`, '');
+  L.push('| 검사 항목 | 결과 | 검증 시각 | 증거 |', '|---|---|---|---|');
+  for (const c of checks) {
+    const res = c.not_verified ? '미실행' : (OUTCOME[c.outcome] || [c.outcome])[0];
+    const ev = c.not_verified ? '' : [c.screenshot ? '화면' : '', c.steps ? `단계 ${c.steps}` : '', c.requests ? `응답 ${c.requests}` : ''].filter(Boolean).join(', ');
+    L.push(`| ${c.title || c.scenario_id} | ${res}${!c.not_verified && c.outcome !== 'PASS' && (c.actual || c.error) ? ` (${(c.actual || c.error).replace(/\|/g, '/')})` : ''} | ${c.finished_at || ''} | ${ev} |`);
+  }
+  return L.join('\n');
+}
+async function copyMarkdown() {
+  try { await navigator.clipboard.writeText(toMarkdown()); toast('Markdown을 복사했습니다. Jira나 문서에 붙여넣으세요.'); }
+  catch { toast('복사에 실패했습니다. 리포트 페이지에서 내용을 선택해 복사하세요.'); }
+}
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2500); }
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

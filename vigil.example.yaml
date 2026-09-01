@@ -1,0 +1,108 @@
+# vigil starter config (schema version 4). Edit url.md first: its first URL
+# becomes target.base_url and its host is allowlisted automatically.
+version: 4
+
+runtime:
+  mode: local
+
+project:
+  id: my-web-app
+  repo: ../my-web-app              # git checkout of the deployed application
+
+target:
+  url_file: url.md                 # first URL = primary target; its host is allowlisted automatically
+  base_url: https://dev.example.com
+  allowed_hosts: [dev.example.com]
+
+discovery:
+  adapter: generic-git             # generic-git | sdlc-kit | file
+  branch: origin/main
+  # commits are grouped by the issue key in their subject; uppercase-only by
+  # default so "utf-8" is not read as a key. Use (?i) if your team writes
+  # keys in lower case, e.g. '(?i)\bproj-\d+'
+  issue_key_pattern: '\b[A-Z][A-Z0-9]+-\d+\b'
+  fetch: true
+  path_prefixes: [src/]
+  route_map:
+    - { path_prefix: src/, route: /, capability: app }
+  poll_interval: 120s
+  history_limit: 3
+
+deployment:
+  readiness:
+    strategy: delay                # delay | asset_version | version_endpoint
+    delay_after_ship: 2m
+    max_wait: 30m
+
+browser:
+  primary: lightpanda
+  fallback: chromium
+  lightpanda: { binary: bin/lightpanda, host: 127.0.0.1, port: 9333 }
+  chromium: { binary: "", headless: true }   # empty = auto-detect
+  step_timeout: 15s
+  run_timeout: 3m
+
+workers:
+  functional: 1
+
+state: { type: sqlite, path: .vigil/state.db }
+evidence:
+  type: local
+  dir: evidence/
+  retain_pass_days: 3              # pass evidence
+  retain_fail_days: 30             # failure + agent evidence
+  max_total_mb: 1024               # cap; oldest pass runs -> agent runs -> failures are deleted (newest per scenario/feature kept)
+  retain_runs_days: 90             # run rows in the database (incident-linked and newest-per-scenario kept)
+  chromium_capture: per-deploy     # one Chromium re-run per deployment for a real screenshot after a Lightpanda pass
+
+budget:
+  browser_minutes_per_hour: 60
+  chromium_minutes_per_hour: 5
+  agent_tasks_per_hour: 4
+
+policy:
+  allow_destructive: false
+  soak_passes: 3
+  quarantine_after: 3
+  retry_on_fail: 1
+  observation_oracle: needs_review
+
+schedule:
+  soak: 10m
+  p0: 15m
+  p1: 60m
+  p2: 6h
+  failure_backoff: 5m
+  tick: 10s
+  # 정기 검사를 돌릴 시간대. 이 창 밖에서는 tick 이 새 작업을 큐에 넣지 않는다
+  # (배포 감지로 시작되는 검사는 시간과 무관하게 실행된다).
+  # 현황판 "시스템 활동 > 검사 시간대"에서 바꾸면 여기 값 대신 그 값이 쓰인다.
+  active_hours:
+    enabled: false
+    days: [mon, tue, wed, thu, fri]   # 0-6 숫자도 가능 (0=일)
+    from: "08:00"                     # 포함
+    to: "19:00"                       # 미포함
+    tz: Asia/Seoul                    # 비우면 실행 머신의 로컬 시간대
+
+agent:
+  provider: pi
+  model: zai/glm-5.3-flash
+  thinking: high
+  timeout: 20m                     # on timeout the session is resumed once with WRAP UP
+  extension: ""                    # empty = bundled piext/vigil-browser.js
+  env_map: { ZAI_API_KEY: Z_AI_API_KEY }
+  retries: 3                       # whole-task retries on provider errors
+  backoff: 60s
+  sandbox: auto                    # nono when on PATH, else unsandboxed
+  max_scenarios_per_task: 3
+  max_turns: 40                    # tool-call budget per task
+  continuations: 2                 # session resumes with a fresh budget before WRAP UP
+  model_retries: 10                # in-conversation 429/5xx retries (3s, 6s, 12s ...)
+  model_retry_delay: 3s
+
+personas:
+  qa_user:
+    username: ${QA_USER}
+    password: ${QA_PASSWORD}
+
+paths: { scenarios: scenarios, flows: flows }

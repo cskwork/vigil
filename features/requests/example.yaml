@@ -1,0 +1,21 @@
+# Manual QA request: vigil request features/requests/<name>.yaml [--queue] [--dry-run]
+# Real requests live next to this file and are git-ignored.
+feature_id: checkout-happy-path
+summary: A registered user adds one item to the cart and reaches the payment step
+entry_url: https://dev.example.com/login
+routes:
+  - /login
+  - /cart
+accounts:
+  - qa_user_01          # named test accounts only; never put passwords here
+mutation: reversible    # read-only | reversible | destructive (destructive needs policy.allow_destructive)
+locks:
+  - account:qa_user_01
+max_tool_calls: 80
+timeout_minutes: 30
+max_continuations: 2
+instructions: |
+  1. Open entry_url, sign in as qa_user_01 through the visible login form.
+  2. Search for "sample item", open the first result, add it to the cart.
+  3. Open the cart, start checkout, stop at the payment step (do not pay).
+  4. Screenshot each step; report the exact texts shown in the cart summary.

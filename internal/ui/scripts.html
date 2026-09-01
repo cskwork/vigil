@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>검사 스크립트, QA 현황판</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="/ui/theme.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" aria-label="주 메뉴">
+    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <a href="/" class="page">검증 결과</a>
+    <a href="/scripts" class="active">검사 스크립트 <span class="cnt" id="nAll"></span></a>
+    <a href="/activity" class="page">시스템 활동</a>
+    <div class="rail-foot">
+      <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
+      <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
+    </div>
+  </nav>
+  <div class="content">
+    <header class="topbar">
+      <div class="crumbs">QA 현황판 &rsaquo; <b>검사 스크립트</b></div>
+      <div class="search"><input type="search" id="q" placeholder="스크립트 검색 (제목, ID, 경로)" aria-label="스크립트 검색"></div>
+      <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
+    </header>
+    <main>
+      <div id="fetchErr"></div>
+      <div class="split">
+        <section class="panel" aria-label="스크립트 목록">
+          <header><h2>검사 스크립트</h2><p>고정된 검사 절차(YAML). 시드는 사람이 쓴 것, AI 생성은 도우미가 제안해 검증을 거친 것</p></header>
+          <div class="filters">
+            <label>출처 <select id="fOrigin"><option value="">전체</option><option value="seed">시드(사람 작성)</option><option value="agent">AI 생성</option></select></label>
+            <label>상태 <select id="fState"><option value="">전체</option><option value="ACTIVE">정식 검사</option><option value="SOAK">안정화 중</option><option value="NEEDS_REVIEW">사람 확인 필요</option><option value="CANDIDATE">후보</option><option value="QUARANTINED">잠시 제외</option><option value="EPHEMERAL,DUPLICATE,REJECTED,RETIRED,MERGED,SUPERSEDED">제외됨</option></select></label>
+            <span class="count" id="count"></span>
+          </div>
+          <div class="body">
+            <table>
+              <thead><tr><th>스크립트</th><th>출처</th><th>상태</th><th class="num hide-sm">버전</th><th class="num hide-sm">검사 / 정상</th></tr></thead>
+              <tbody id="list"><tr><td colspan="5"><div class="skel"></div><div class="skel"></div></td></tr></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel detail" aria-label="스크립트 상세" id="detail">
+          <header><h2>상세</h2><p>왼쪽에서 스크립트를 고르세요</p></header>
+          <div class="body"><div class="empty"><b>선택된 스크립트가 없습니다</b>줄을 누르면 검사 절차 원문, 버전 이력, 연결된 기능이 보입니다.</div></div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const prefs = { dev: localStorage.getItem('vigil.dev') === '1', density: localStorage.getItem('vigil.density') || 'comfortable' };
+$('devmode').checked = prefs.dev; document.body.classList.toggle('devmode', prefs.dev);
+$('density').value = prefs.density; document.body.classList.toggle('compact', prefs.density === 'compact');
+$('devmode').onchange = (e) => { localStorage.setItem('vigil.dev', e.target.checked ? '1' : '0'); document.body.classList.toggle('devmode', e.target.checked); };
+$('density').onchange = (e) => { localStorage.setItem('vigil.density', e.target.value); document.body.classList.toggle('compact', e.target.value === 'compact'); };
+
+const STATE = { ACTIVE: ['정식 검사', 'ok'], SOAK: ['안정화 중', 'info'], CANDIDATE: ['후보', 'muted'], NEEDS_REVIEW: ['사람 확인 필요', 'warn'], QUARANTINED: ['불안정, 잠시 제외', 'warn'],
+  DUPLICATE: ['중복', 'muted'], EPHEMERAL: ['일회성', 'muted'], REJECTED: ['제외', 'muted'], MERGED: ['통합', 'muted'], SUPERSEDED: ['대체됨', 'muted'], RETIRED: ['은퇴', 'muted'] };
+const OUTCOME = { PASS: ['정상', 'ok'], APP_FAILURE: ['서비스 문제', 'bad'], QA_FLAKE: ['일시 오류', 'warn'], SCRIPT_DRIFT: ['화면 바뀜', 'warn'], LIGHTPANDA_INCOMPATIBLE: ['재확인', 'info'], BROWSER_AMBIGUOUS: ['재확인', 'info'], AUTH_FAILURE: ['로그인 문제', 'warn'], DATA_FAILURE: ['데이터 문제', 'warn'], ENV_FAILURE: ['환경 문제', 'warn'], NEEDS_REVIEW: ['확인 필요', 'warn'], ORACLE_UNKNOWN: ['기준 불명확', 'warn'] };
+const ORIGIN = { seed: ['시드', 'muted'], agent: ['AI 생성', 'info'], import: ['가져옴', 'muted'], human: ['사람', 'muted'] };
+const WHO = { seed: '사람(파일)', agent: 'AI 도우미', repair: 'AI 수리', system: '시스템', human: '사람' };
+const ORACLE = { spec: '명세', approved_qa: '승인된 검사', contract: '코드 계약', observation: '관찰만' };
+const CLASS = { P0: '매우 중요', P1: '중요', P2: '보통' };
+const LINK = { feature: '기능', capability: '역량', route: '경로', api: 'API', path: '소스 파일', persona: '계정 역할' };
+const st = (map, v) => { const m = map[v]; return v ? `<span class="st st-${m ? m[1] : 'muted'}"><i></i>${esc(m ? m[0] : v)}</span>` : ''; };
+const T = (s) => s ? new Date(s.replace(' ', 'T')) : null;
+function ago(s) { const d = T(s); if (!d) return ''; const sec = (Date.now() - d) / 1000; if (sec < 60) return '방금'; if (sec < 3600) return `${Math.floor(sec / 60)}분 전`; if (sec < 86400) return `${Math.floor(sec / 3600)}시간 전`; return `${Math.floor(sec / 86400)}일 전`; }
+
+let data = null, selected = null, selectedVersion = null, query = '';
+$('q').oninput = (e) => { query = e.target.value.trim().toLowerCase(); render(); };
+$('fOrigin').onchange = render; $('fState').onchange = render;
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/scripts', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    data = await r.json();
+    $('fetchErr').innerHTML = ''; $('live').classList.remove('off');
+    $('freshText').textContent = '실시간 갱신 ' + new Date(data.now).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    $('brandTarget').textContent = data.target.replace(/^https?:\/\//, '');
+    render();
+  } catch (e) {
+    $('live').classList.add('off'); $('freshText').textContent = '갱신 실패';
+    $('fetchErr').innerHTML = `<div class="errbox"><span>현황 서버에 연결하지 못했습니다 (${esc(e.message)}).</span><button class="btn" onclick="refresh()">다시 시도</button></div>`;
+  }
+}
+
+function render() {
+  if (!data) return;
+  const all = data.scripts || [];
+  $('nAll').textContent = all.length;
+  const fo = $('fOrigin').value, fs = $('fState').value.split(',').filter(Boolean);
+  const rows = all.filter(s => (!fo || (s.origin || 'seed') === fo) && (!fs.length || fs.includes(s.state))
+    && (!query || (s.title || '').toLowerCase().includes(query) || s.id.toLowerCase().includes(query) || (s.links || []).some(l => l.LinkValue.toLowerCase().includes(query))));
+  const agents = all.filter(s => s.origin === 'agent').length;
+  $('count').textContent = `${rows.length}개 표시 · 전체 ${all.length}개 (AI 생성 ${agents}개)`;
+  $('list').innerHTML = rows.length ? rows.map(s => `<tr class="click${selected === s.id ? ' sel' : ''}" data-id="${esc(s.id)}">
+      <td><div class="t">${esc(s.title || s.id)}</div><div class="sub">${esc(CLASS[s.class] || s.class)} · 기준 ${esc(ORACLE[s.oracle] || s.oracle || '없음')} <span class="dev mono">${esc(s.id)}</span></div></td>
+      <td>${st(ORIGIN, s.origin || 'seed')}</td>
+      <td>${st(STATE, s.state)}${s.state === 'SOAK' ? `<div class="sub">${s.soak_passes}/${s.soak_target}</div>` : ''}${s.last_outcome ? `<div class="sub">최근 ${esc((OUTCOME[s.last_outcome] || [s.last_outcome])[0])}</div>` : ''}</td>
+      <td class="num hide-sm">v${(s.versions || []).length ? s.versions[0].version : 1}</td>
+      <td class="num hide-sm">${s.runs} / ${s.passes}</td></tr>`).join('')
+    : `<tr><td colspan="5" class="empty"><b>조건에 맞는 스크립트가 없습니다</b>${fo === 'agent' ? 'AI 도우미가 제안해 검증을 통과한 스크립트가 아직 없습니다. 새 기능이 배포되면 생깁니다.' : '필터나 검색어를 바꿔 보세요.'}</td></tr>`;
+  document.querySelectorAll('#list tr.click').forEach(tr => tr.onclick = () => { selected = tr.dataset.id; selectedVersion = null; render(); });
+  renderDetail(all.find(s => s.id === selected));
+}
+
+function renderDetail(s) {
+  const d = $('detail');
+  if (!s) { d.innerHTML = `<header><h2>상세</h2><p>왼쪽에서 스크립트를 고르세요</p></header><div class="body"><div class="empty"><b>선택된 스크립트가 없습니다</b>줄을 누르면 검사 절차 원문, 버전 이력, 연결된 기능이 보입니다.</div></div>`; return; }
+  const cur = (s.versions || []).find(v => v.current) || (s.versions || [])[0];
+  const showV = selectedVersion || (cur && cur.version);
+  const links = (s.links || []).map(l => `<span class="st st-muted"><i></i>${esc(LINK[l.LinkType] || l.LinkType)} ${esc(l.LinkValue)}</span>`).join(' ');
+  d.innerHTML = `
+    <header><h2>${esc(s.title || s.id)}</h2></header>
+    <div class="body">
+      <div class="agent-head">${st(STATE, s.state)}${st(ORIGIN, s.origin || 'seed')}<span class="sub">${esc(CLASS[s.class] || s.class)}</span><span class="sub">브라우저 ${esc(s.browser)}</span><span class="sub">${esc(s.mutation === 'read-only' ? '읽기 전용' : s.mutation === 'reversible' ? '되돌릴 수 있는 변경' : '파괴적 변경')}</span></div>
+      ${s.state === 'NEEDS_REVIEW' ? `<div class="cmd"><span>사람 확인이 필요한 스크립트입니다. 내용이 맞으면 터미널에서 승격하세요:</span><code>vigil approve ${esc(s.id)}</code></div>` : ''}
+      <dl class="kv">
+        <dt>ID</dt><dd class="mono">${esc(s.id)}</dd>
+        <dt>판단 기준</dt><dd>${esc(ORACLE[s.oracle] || s.oracle || '없음')}</dd>
+        <dt>검사 이력</dt><dd>${s.runs}회 검사, ${s.passes}회 정상${s.flakes ? `, 일시 오류 ${s.flakes}회` : ''}${s.last_run_at ? ` · 최근 ${ago(s.last_run_at)}` : ''}</dd>
+        <dt>다음 검사</dt><dd>${['ACTIVE', 'SOAK'].includes(s.state) ? esc(s.next_due_at || '곧') : '예정 없음'}</dd>
+        <dt>연결</dt><dd>${links || '<span class="sub">없음</span>'}</dd>
+        ${s.locks && s.locks.length ? `<dt>공유 자원</dt><dd>${s.locks.map(esc).join(', ')}</dd>` : ''}
+      </dl>
+      <div class="sub" style="padding:4px 0 6px">버전 이력 (누르면 그 버전의 원문)</div>
+      <div class="versions">${(s.versions || []).map(v => `<button class="${v.version === showV ? 'active' : ''}" data-v="${v.version}"><span class="who">v${v.version}</span><span>${esc(WHO[v.created_by] || v.created_by)}</span><span class="sub">${esc(v.reason || '')}</span><span class="sub" style="margin-left:auto">${esc(v.created_at)}</span></button>`).join('')}</div>
+      <div class="sub" style="padding:12px 0 6px">검사 절차 원문 (v${showV})</div>
+      <pre class="yaml" id="yaml">${esc(showV === (cur && cur.version) ? s.yaml : '불러오는 중')}</pre>
+    </div>`;
+  d.querySelectorAll('.versions button').forEach(b => b.onclick = () => { selectedVersion = Number(b.dataset.v); render(); });
+  if (showV !== (cur && cur.version)) loadVersion(s.id, showV);
+}
+
+async function loadVersion(id, v) {
+  try {
+    const r = await fetch(`/api/script?id=${encodeURIComponent(id)}&v=${v}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json(); const el = $('yaml'); if (el) el.textContent = j.yaml;
+  } catch (e) { const el = $('yaml'); if (el) el.textContent = '원문을 불러오지 못했습니다: ' + e.message; }
+}
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

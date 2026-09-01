@@ -1,0 +1,22 @@
+[
+  { "el": "body text on canvas", "fg": "#1b1f24", "bg": "#f4f5f7", "size": "body" },
+  { "el": "body text on surface", "fg": "#1b1f24", "bg": "#fbfbfa", "size": "body" },
+  { "el": "muted text on surface", "fg": "#5f6772", "bg": "#fbfbfa", "size": "normal" },
+  { "el": "muted text on canvas", "fg": "#5f6772", "bg": "#f4f5f7", "size": "normal" },
+  { "el": "table header on surface", "fg": "#5f6772", "bg": "#fbfbfa", "size": "normal" },
+  { "el": "link / accent text", "fg": "#0f766e", "bg": "#fbfbfa", "size": "normal" },
+  { "el": "nav active label on accent", "fg": "#f2fbf9", "bg": "#0f766e", "size": "normal" },
+  { "el": "nav label on rail", "fg": "#1b1f24", "bg": "#eceef2", "size": "normal" },
+  { "el": "status ok pill", "fg": "#166534", "bg": "#e3f3e7", "size": "normal" },
+  { "el": "status warn pill", "fg": "#7c3f00", "bg": "#fbeed7", "size": "normal" },
+  { "el": "status bad pill", "fg": "#991b1b", "bg": "#fbe3e3", "size": "normal" },
+  { "el": "status info pill", "fg": "#1e3a8a", "bg": "#e3eafa", "size": "normal" },
+  { "el": "status neutral pill", "fg": "#374151", "bg": "#eceef2", "size": "normal" },
+  { "el": "KPI big number on surface", "fg": "#1b1f24", "bg": "#fbfbfa", "size": "large" },
+  { "el": "north-star ok headline", "fg": "#166534", "bg": "#fbfbfa", "size": "large" },
+  { "el": "north-star bad headline", "fg": "#991b1b", "bg": "#fbfbfa", "size": "large" },
+  { "el": "north-star warn headline", "fg": "#7c3f00", "bg": "#fbfbfa", "size": "large" },
+  { "el": "error banner text", "fg": "#991b1b", "bg": "#fbe3e3", "size": "normal" },
+  { "el": "button label on accent", "fg": "#f2fbf9", "bg": "#0f766e", "size": "normal" },
+  { "el": "dev mono text on tint", "fg": "#374151", "bg": "#eceef2", "size": "normal" }
+]

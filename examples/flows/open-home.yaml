@@ -1,0 +1,7 @@
+flow:
+  id: open-home
+  version: 1
+  title: Open the home page and wait for the main navigation
+steps:
+  - goto: /
+  - wait_for: { by: css, value: "nav, header", timeout: 15s }

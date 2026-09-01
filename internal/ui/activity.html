@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>시스템 활동, QA 현황판</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="/ui/theme.css">
+<style>
+  .win-row { display:flex; flex-wrap:wrap; gap:14px 18px; align-items:flex-end; margin-top:12px; }
+  .win-row > label { display:flex; flex-direction:column; gap:4px; font-size:var(--fs-sm); color:var(--muted); }
+  .win-row input[type=time], .win-row input[type=text] { border:1px solid var(--line-strong); background:var(--surface); border-radius:8px; padding:6px 10px; }
+  .win-days { display:flex; gap:6px; }
+  .win-days span { position:relative; }
+  .win-days input { position:absolute; opacity:0; inset:0; margin:0; cursor:pointer; }
+  .win-days b { display:block; min-width:36px; text-align:center; padding:6px 0; border:1px solid var(--line-strong); border-radius:8px; font-weight:500; }
+  .win-days input:checked + b { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:600; }
+  .win-days input:focus-visible + b { outline:2px solid var(--accent); outline-offset:2px; }
+  .win-actions { display:flex; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap; }
+  .win-status { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+  body:not(.devmode) .win-tz { display:none; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" aria-label="주 메뉴">
+    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <a href="/" class="page">검증 결과</a>
+    <a href="/scripts" class="page">검사 스크립트</a>
+    <div class="rail-sep"></div>
+    <a href="#overview" class="active">개요</a>
+    <a href="#now">진행 상황 <span class="cnt" id="nNow"></span></a>
+    <a href="#ai">AI 도우미</a>
+    <a href="#window">검사 시간대</a>
+    <a href="#checks">검사 항목 <span class="cnt" id="nChecks"></span></a>
+    <a href="#issues">발견된 문제 <span class="cnt" id="nIssues"></span></a>
+    <a href="#history">검사 기록</a>
+    <a href="#deploys">배포 변경 <span class="cnt" id="nDeploys"></span></a>
+    <div class="rail-foot">
+      <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
+      <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
+    </div>
+  </nav>
+  <div class="content">
+    <header class="topbar">
+      <div class="crumbs">QA 현황판 &rsaquo; 시스템 활동 &rsaquo; <b id="crumb">개요</b></div>
+      <div class="search"><input type="search" id="q" placeholder="검사 항목 검색 (예: 교사 입장)" aria-label="검사 항목 검색"></div>
+      <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
+    </header>
+    <main>
+      <section id="overview" aria-label="개요">
+        <div class="kpis" id="kpis">
+          <article class="kpi north"><h3>서비스 상태</h3><div class="value"><div class="skel" style="width:60%"></div></div><p class="delta">불러오는 중</p></article>
+          <article class="kpi"><h3>지난 1시간 성공률</h3><div class="skel"></div></article>
+          <article class="kpi"><h3>사람 확인 필요</h3><div class="skel"></div></article>
+          <article class="kpi"><h3>진행 중 / 대기</h3><div class="skel"></div></article>
+          <article class="kpi"><h3>AI 도우미 사용</h3><div class="skel"></div></article>
+        </div>
+        <div id="fetchErr"></div>
+      </section>
+
+      <div class="grid2">
+        <section id="now" class="panel" aria-label="진행 상황">
+          <header><h2>진행 상황</h2><p>지금 실행 중인 검사와 다음 차례</p></header>
+          <div class="body" id="nowBody"><div class="skel"></div><div class="skel" style="width:70%"></div></div>
+        </section>
+        <section id="ai" class="panel" aria-label="AI 도우미">
+          <header><h2>AI 도우미</h2><p id="agentMeta">배포된 새 기능을 직접 살펴보고 검사 항목을 제안합니다</p></header>
+          <div class="body" id="agentBody"><div class="skel"></div><div class="skel" style="width:80%"></div></div>
+        </section>
+      </div>
+
+      <section id="window" class="panel" aria-label="검사 시간대">
+        <header><h2>검사 시간대</h2><p>정기 검사를 자동으로 돌릴 요일과 시간입니다. 이 시간 밖에는 새 검사를 시작하지 않습니다. 배포가 감지되어 시작되는 검사는 시간과 상관없이 그대로 실행됩니다</p></header>
+        <div class="body">
+          <div class="win-status" id="winStatus"><div class="skel" style="width:40%"></div></div>
+          <div class="win-row">
+            <label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="winEnabled"><span>시간대 제한 사용</span></label>
+          </div>
+          <div class="win-row">
+            <label>요일
+              <div class="win-days" id="winDays">
+                <span><input type="checkbox" id="wd1" value="1"><b>월</b></span>
+                <span><input type="checkbox" id="wd2" value="2"><b>화</b></span>
+                <span><input type="checkbox" id="wd3" value="3"><b>수</b></span>
+                <span><input type="checkbox" id="wd4" value="4"><b>목</b></span>
+                <span><input type="checkbox" id="wd5" value="5"><b>금</b></span>
+                <span><input type="checkbox" id="wd6" value="6"><b>토</b></span>
+                <span><input type="checkbox" id="wd0" value="0"><b>일</b></span>
+              </div>
+            </label>
+            <label>시작 <input type="time" id="winFrom" step="300"></label>
+            <label>끝 <input type="time" id="winTo" step="300"></label>
+            <label class="win-tz">기준 시간대 <input type="text" id="winTz" placeholder="Asia/Seoul" size="14"></label>
+          </div>
+          <div class="win-actions">
+            <button class="btn primary" id="winSave">저장</button>
+            <button class="btn" id="winReset">설정 파일 값으로 되돌리기</button>
+            <span class="sub" id="winSource"></span>
+          </div>
+          <p class="sub">끝 시각을 시작보다 이르게 두면 자정을 넘기는 시간대가 됩니다 (예: 22:00 → 06:00).</p>
+        </div>
+      </section>
+
+      <section id="checks" class="panel" aria-label="검사 항목">
+        <header><h2>검사 항목</h2><p>서비스가 이렇게 동작해야 한다는 약속. 정해진 주기로 반복 확인합니다</p></header>
+        <div class="body">
+          <table>
+            <thead><tr><th>검사 항목</th><th>최근 결과</th><th class="hide-sm">다음 검사</th><th class="num hide-sm">검사 / 정상</th><th class="hide-sm">중요도</th></tr></thead>
+            <tbody id="scenarios"><tr><td colspan="5"><div class="skel"></div><div class="skel"></div></td></tr></tbody>
+          </table>
+          <div class="legend" id="legend"></div>
+        </div>
+      </section>
+
+      <section id="issues" class="panel" aria-label="발견된 문제">
+        <header><h2>발견된 문제</h2><p>검사에서 약속과 다르게 동작한 것으로 확인된 항목</p></header>
+        <div class="body" id="issuesBody"><div class="skel"></div></div>
+      </section>
+
+      <section id="history" class="panel" aria-label="검사 기록">
+        <header><h2>검사 기록</h2><p>줄을 누르면 단계별로 무엇을 확인했는지 보입니다</p></header>
+        <div class="body">
+          <table>
+            <thead><tr><th>시각</th><th>검사 항목</th><th>결과</th><th class="num hide-sm">소요</th></tr></thead>
+            <tbody id="runs"><tr><td colspan="4"><div class="skel"></div><div class="skel"></div></td></tr></tbody>
+          </table>
+          <div class="more" id="more"></div>
+        </div>
+      </section>
+
+      <section id="deploys" class="panel" aria-label="배포 변경">
+        <header><h2>배포 변경</h2><p>코드가 바뀌어 배포되면 관련 검사를 먼저 돌립니다</p></header>
+        <div class="body">
+          <table>
+            <thead><tr><th>변경</th><th>배포 확인</th><th class="hide-sm">출시 시각</th></tr></thead>
+            <tbody id="features"><tr><td colspan="3"><div class="skel"></div></td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const open = new Set();
+let showAll = false, query = '', lastOk = 0;
+
+// preferences
+const prefs = { dev: localStorage.getItem('vigil.dev') === '1', density: localStorage.getItem('vigil.density') || 'comfortable' };
+$('devmode').checked = prefs.dev; document.body.classList.toggle('devmode', prefs.dev);
+$('density').value = prefs.density; document.body.classList.toggle('compact', prefs.density === 'compact');
+$('devmode').onchange = (e) => { localStorage.setItem('vigil.dev', e.target.checked ? '1' : '0'); document.body.classList.toggle('devmode', e.target.checked); };
+$('density').onchange = (e) => { localStorage.setItem('vigil.density', e.target.value); document.body.classList.toggle('compact', e.target.value === 'compact'); };
+$('q').oninput = (e) => { query = e.target.value.trim().toLowerCase(); render(); };
+
+// nav highlight via IntersectionObserver (no scroll listener)
+const links = [...document.querySelectorAll('.rail a[href^="#"]')];
+const visible = new Map();
+const io = new IntersectionObserver((entries) => {
+  entries.forEach(e => visible.set(e.target.id, e.isIntersecting ? e.boundingClientRect.top : null));
+  const top = [...visible.entries()].filter(([, t]) => t !== null).sort((a, b) => a[1] - b[1])[0];
+  if (!top) return;
+  links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + top[0]));
+  const active = links.find(a => a.classList.contains('active'));
+  if (active) $('crumb').textContent = active.textContent.replace(/\d+\s*$/, '').trim();
+}, { rootMargin: '-80px 0px -60% 0px', threshold: [0.1, 0.5] });
+document.querySelectorAll('main section').forEach(s => io.observe(s));
+
+// vocabulary (plain Korean, one register)
+const OUTCOME = { PASS: ['정상', 'ok'], APP_FAILURE: ['서비스 문제', 'bad'], QA_FLAKE: ['일시 오류, 재검사 정상', 'warn'], SCRIPT_DRIFT: ['화면이 바뀜, 검사 수정 필요', 'warn'],
+  LIGHTPANDA_INCOMPATIBLE: ['다른 브라우저로 재확인', 'info'], BROWSER_AMBIGUOUS: ['재확인 필요', 'info'], AUTH_FAILURE: ['로그인 문제', 'warn'], DATA_FAILURE: ['데이터 문제', 'warn'],
+  ENV_FAILURE: ['검사 환경 문제', 'warn'], DEPLOYMENT_NOT_READY: ['배포 대기', 'muted'], ORACLE_UNKNOWN: ['판단 기준 불명확', 'warn'], NEEDS_REVIEW: ['사람 확인 필요', 'warn'] };
+const STATE = { ACTIVE: ['정식 검사', 'ok'], SOAK: ['안정화 중', 'info'], CANDIDATE: ['후보', 'muted'], NEEDS_REVIEW: ['사람 확인 필요', 'warn'], QUARANTINED: ['불안정, 잠시 제외', 'warn'],
+  DUPLICATE: ['중복', 'muted'], EPHEMERAL: ['일회성', 'muted'], REJECTED: ['제외', 'muted'], MERGED: ['통합', 'muted'], SUPERSEDED: ['대체됨', 'muted'], RETIRED: ['은퇴', 'muted'] };
+const READY = { READY: ['배포 확인', 'ok'], WAITING_FOR_DEPLOYMENT: ['배포 기다리는 중', 'muted'], DEPLOYMENT_UNKNOWN: ['확인 못 함, 시간 경과로 진행', 'warn'] };
+const KIND = { RUN_SCENARIO: '검사 실행', AGENT_DISCOVER: 'AI가 새 기능 살펴보기', AGENT_VERIFY: 'AI가 변경 사항 확인', AGENT_REPAIR: 'AI가 검사 스크립트 수리', CHROMIUM_CONFIRM: 'Chromium으로 재확인', VALIDATE_CANDIDATE: '새 검사 후보 검증' };
+const CLASS = { P0: '매우 중요', P1: '중요', P2: '보통' };
+const BROWSER = { lightpanda: '가벼운 브라우저', chromium: 'Chromium' };
+const STEP = { goto: '페이지 이동', click: '클릭', fill: '입력', type: '입력', press: '키 입력', select: '선택', hover: '마우스 올리기', wait_for: '화면 표시 기다림', wait_ms: '잠시 기다림', wait_url: '주소 변경 기다림',
+  assert_text: '문구 확인', assert_no_text: '문구 없음 확인', assert_visible: '표시 확인', assert_not_visible: '숨김 확인', assert_url: '주소 확인', assert_count: '개수 확인', assert_request: '서버 응답 확인', assert_attr: '상태 확인', expect_popup: '새 탭 열림 확인', eval: '값 확인', use_flow: '공통 절차', screenshot: '화면 캡처' };
+const DECISION = { NEW_SCRIPT: ['새 검사 항목 제안', 'ok'], PATCH_SCRIPT: ['검사 수리안 제안', 'ok'], APP_FAILURE: ['서비스 문제 발견', 'bad'], NO_NEW_COVERAGE: ['추가할 검사 없음', 'muted'], NEEDS_REVIEW: ['사람 확인 필요', 'warn'], ORACLE_UNKNOWN: ['판단 기준 불명확', 'warn'] };
+const st = (map, v, fallback) => { const m = map[v]; if (!v && !fallback) return ''; return `<span class="st st-${m ? m[1] : 'muted'}"><i></i>${esc(m ? m[0] : (v || fallback))}</span>`; };
+const dev = (s) => `<span class="dev mono">${esc(s)}</span>`;
+const T = (s) => s ? new Date(s.replace(' ', 'T')) : null;
+function ago(s) { const d = T(s); if (!d) return ''; const sec = (Date.now() - d) / 1000; if (sec < 60) return '방금'; if (sec < 3600) return `${Math.floor(sec / 60)}분 전`; if (sec < 86400) return `${Math.floor(sec / 3600)}시간 전`; return `${Math.floor(sec / 86400)}일 전`; }
+function until(s) { const d = T(s); if (!d) return '곧'; const sec = (d - Date.now()) / 1000; if (sec <= 0) return '곧'; if (sec < 3600) return `${Math.ceil(sec / 60)}분 후`; return `${Math.floor(sec / 3600)}시간 ${Math.ceil((sec % 3600) / 60)}분 후`; }
+const hm = (s) => s ? s.slice(11, 16) : '';
+const secs = (ms) => (ms / 1000).toFixed(1) + '초';
+function toolLine(c) {
+  let a = []; try { a = JSON.parse(c.args).args || []; } catch { }
+  const [cmd, x] = a; const path = (u) => { try { const p = new URL(u); return p.pathname + p.search; } catch { return u; } };
+  switch (cmd) {
+    case 'open': return ['열기', `페이지 열기 ${path(x)}`];
+    case 'snapshot': return ['보기', '화면 구성 살펴보기'];
+    case 'click': return ['클릭', '화면의 버튼이나 링크 클릭'];
+    case 'fill': case 'type': return ['입력', '입력창에 글자 입력'];
+    case 'get': return ['확인', x === 'url' ? '현재 주소 확인' : x === 'title' ? '페이지 제목 확인' : `내용 읽기 (${x})`];
+    case 'wait': return ['대기', `기다림 ${a.slice(1).join(' ')}`];
+    case 'network': return ['통신', '서버 통신 내역 확인'];
+    case 'console': case 'errors': return ['오류', '브라우저 오류 메시지 확인'];
+    case 'tab': return ['탭', x === 'list' ? '열린 탭 목록 확인' : `탭 전환 ${x}`];
+    case 'screenshot': return ['캡처', '화면 캡처'];
+    case 'scroll': return ['스크롤', '화면 스크롤'];
+    case 'find': return ['찾기', `화면 요소 찾기 ${a.slice(1).join(' ')}`];
+    case 'close': return ['종료', '브라우저 닫기'];
+    default: return ['기타', a.join(' ')];
+  }
+}
+
+let data = null;
+async function refresh() {
+  try {
+    const r = await fetch('/api/overview', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    data = await r.json(); lastOk = Date.now();
+    $('fetchErr').innerHTML = ''; $('live').classList.remove('off');
+    $('freshText').textContent = '실시간 갱신 ' + new Date(data.now).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    render();
+  } catch (e) {
+    $('live').classList.add('off');
+    $('freshText').textContent = lastOk ? `갱신 실패, 마지막 성공 ${ago(new Date(lastOk).toISOString())}` : '연결 실패';
+    $('fetchErr').innerHTML = `<div class="errbox"><span>현황 서버에 연결하지 못했습니다 (${esc(e.message)}). vigil가 실행 중인지 확인해 주세요.</span><button class="btn" onclick="refresh()">다시 시도</button></div>`;
+  }
+}
+
+function render() {
+  const o = data; if (!o) return;
+  $('brandTarget').textContent = o.target.replace(/^https?:\/\//, '');
+  const runs = o.runs || [], scs = o.scenarios || [], incs = (o.incidents || []).filter(i => i.state === 'OPEN'), feats = o.features || [];
+  const now = Date.now(), h1 = now - 3600e3, h24 = now - 86400e3;
+  const good = (r) => r.outcome === 'PASS' || r.outcome === 'QA_FLAKE';
+  const r1 = runs.filter(r => T(r.finished_at) > h1), r24 = runs.filter(r => T(r.finished_at) > h24);
+  const rate = (rs) => rs.length ? Math.round(100 * rs.filter(good).length / rs.length) : null;
+  const failing = scs.filter(s => s.last_outcome === 'APP_FAILURE');
+  const review = scs.filter(s => s.state === 'NEEDS_REVIEW').length;
+  const infra = scs.some(s => ['ENV_FAILURE', 'AUTH_FAILURE', 'DATA_FAILURE'].includes(s.last_outcome));
+  const jb = o.job_counts || {}, b = o.budget || {};
+  const lastRun = runs[0];
+
+  let tone = 'idle', head = '검사 결과 없음', sub = '검사가 시작되면 결론이 표시됩니다.';
+  if (incs.length || failing.length) { tone = 'bad'; head = '문제 있음'; sub = `확인된 문제 ${incs.length || failing.length}건. 아래 "발견된 문제"를 봐 주세요.`; }
+  else if (lastRun && infra) { tone = 'warn'; head = '검사 환경 문제'; sub = '서비스 결함은 아닙니다. 네트워크나 로그인 상태를 확인해 주세요.'; }
+  else if (lastRun) { tone = 'ok'; head = '정상'; sub = `마지막 검사 ${ago(lastRun.finished_at)} (${hm(lastRun.finished_at)}) · 미해결 문제 0건`; }
+  const rate1 = rate(r1), rate24 = rate(r24);
+  $('kpis').innerHTML = `
+    <article class="kpi north ${tone}"><h3>서비스 상태</h3><div class="value">${st({ ok: [head, 'ok'], bad: [head, 'bad'], warn: [head, 'warn'], idle: [head, 'muted'] }, tone)}</div><p class="delta">${esc(sub)}</p></article>
+    <article class="kpi"><h3>지난 1시간 성공률</h3><div class="value">${rate1 === null ? '<small>검사 없음</small>' : rate1 + '<small>%</small>'}</div><p class="delta">${r1.length}회 검사${rate24 !== null ? ` · 24시간 평균 ${rate24}%` : ''}</p></article>
+    <article class="kpi"><h3>사람 확인 필요</h3><div class="value">${review}</div><p class="delta">목표 0 · ${review ? 'AI 제안이나 실패 원인을 확인해 주세요' : '지금은 없음'}</p></article>
+    <article class="kpi"><h3>진행 중 / 대기</h3><div class="value">${jb.LEASED || 0}<small>/ ${jb.READY || 0}</small></div><p class="delta">작업자가 자동으로 처리합니다</p></article>
+    <article class="kpi"><h3>AI 도우미 사용</h3><div class="value">${b.agent_tasks || 0}<small>/ ${b.agent_budget || '-'} (시간당 예산)</small></div><p class="delta">브라우저 ${(b.browser_minutes || 0).toFixed(1)}분 사용 (1시간)</p></article>`;
+
+  const active = o.active_jobs || [], queued = o.queued_jobs || [];
+  $('nNow').textContent = active.length ? active.length : ''; $('nChecks').textContent = scs.length; $('nIssues').textContent = incs.length ? incs.length : ''; $('nDeploys').textContent = feats.length || '';
+  $('nowBody').innerHTML = active.length || queued.length ? `
+    ${active.map(j => `<div class="act"><span class="tag">실행 중</span><div><b>${esc(KIND[j.kind] || j.kind)}</b> ${esc(j.title || j.scenario || j.feature)}<div class="sub">${esc(BROWSER[j.browser] || j.browser || '')}${j.since ? ` · ${ago(j.since)} 시작` : ''}${j.attempt > 1 ? ` · ${j.attempt}번째 시도` : ''} ${dev('job#' + j.id)}</div></div></div>`).join('')}
+    ${queued.length ? `<div class="act"><span class="tag" style="background:var(--neutral-bg);color:var(--neutral)">다음 차례</span><div>${queued.slice(0, 6).map(j => esc(j.title || j.scenario || j.feature)).join('<br>')}${queued.length > 6 ? `<div class="sub">외 ${queued.length - 6}건</div>` : ''}</div></div>` : ''}`
+    : `<div class="empty"><b>지금은 쉬는 중입니다</b>정해진 주기(매우 중요 15분 · 중요 1시간 · 보통 6시간)마다 자동으로 다시 검사합니다.</div>`;
+
+  renderAgent(o.agent);
+  renderWindow(o.window);
+
+  const filt = (s) => !query || (s.title || '').toLowerCase().includes(query) || (s.id || '').toLowerCase().includes(query);
+  const visScs = scs.filter(filt);
+  $('scenarios').innerHTML = visScs.length ? visScs.map(s => `<tr>
+      <td><div class="t">${esc(s.title || s.id)}</div><div class="sub">${st(STATE, s.state)}${s.soak ? ` 안정화 ${esc(s.soak)}` : ''} ${dev(`${s.id} · ${s.browser} · oracle=${s.oracle}`)}</div></td>
+      <td>${st(OUTCOME, s.last_outcome) || '<span class="sub">아직 없음</span>'}<div class="sub">${s.last_run_at ? ago(s.last_run_at) : ''}${s.consecutive_failures ? ` · 연속 ${s.consecutive_failures}회 실패` : ''}</div></td>
+      <td class="hide-sm when">${['ACTIVE', 'SOAK'].includes(s.state) ? esc(until(s.next_due_at)) : '<span class="sub">예정 없음</span>'}</td>
+      <td class="num hide-sm">${s.runs} / ${s.passes}${s.flakes ? `<div class="sub">일시 오류 ${s.flakes}</div>` : ''}</td>
+      <td class="hide-sm when">${esc(CLASS[s.class] || s.class)}</td></tr>`).join('')
+    : `<tr><td colspan="5" class="empty">${query ? `<b>"${esc(query)}"에 맞는 검사 항목이 없습니다</b>검색어를 지우면 전체 목록이 보입니다.` : '<b>등록된 검사 항목이 없습니다</b>scenarios 폴더에 검사 파일을 추가하고 vigil add 를 실행하세요.'}</td></tr>`;
+  $('legend').innerHTML = `${st(OUTCOME, 'PASS')} 약속대로 동작 &nbsp; ${st(OUTCOME, 'APP_FAILURE')} 약속과 다르게 동작, 개발팀 확인 &nbsp; ${st(OUTCOME, 'SCRIPT_DRIFT')} 화면 구조가 바뀌어 검사 자체를 고쳐야 함 &nbsp; ${st(OUTCOME, 'ENV_FAILURE')} 네트워크나 로그인 등 검사 환경 문제`;
+
+  $('issuesBody').innerHTML = incs.length ? `<table><thead><tr><th>문제</th><th>종류</th><th class="hide-sm">발견 시각</th></tr></thead><tbody>${incs.map(i => `<tr><td class="t">${i.md_rel ? `<a href="/evidence/${esc(i.md_rel)}" target="_blank" rel="noopener">${esc(i.title)}</a>` : esc(i.title)}</td><td>${st({ ENVIRONMENT: ['검사 환경 문제', 'warn'], APP_REGRESSION: ['서비스 결함 의심', 'bad'] }, i.kind)}</td><td class="hide-sm">${esc(i.created_at)} <span class="sub">(${ago(i.created_at)})</span></td></tr>`).join('')}</tbody></table>`
+    : `<div class="empty"><b>현재 확인된 문제가 없습니다</b>문제가 확인되면 재현 절차와 증거가 여기에 정리됩니다.</div>`;
+
+  const visRuns = runs.filter(filt);
+  const shown = showAll ? visRuns : visRuns.slice(0, 20);
+  $('runs').innerHTML = shown.length ? shown.map(r => {
+    const why = r.outcome !== 'PASS' ? `<div class="sub">${r.failed_step ? `${r.failed_step}단계 "${esc(STEP[r.failed_action] || r.failed_action)}"에서 멈춤: ${esc(r.actual || r.error)}` : esc(r.error)}</div>` : '';
+    const row = `<tr class="click" data-dir="${esc(r.evidence_rel)}" data-id="${r.id}" aria-expanded="${open.has(String(r.id))}"><td class="when">${hm(r.finished_at)}<div class="sub">${ago(r.finished_at)}</div></td><td><span class="t">${esc(r.title || r.scenario)}</span> <span class="sub">${esc(BROWSER[r.browser] || r.browser)}</span> ${dev(`v${r.version} run#${r.id}`)}${why}</td><td>${st(OUTCOME, r.outcome)}</td><td class="num hide-sm">${secs(r.duration_ms)}</td></tr>`;
+    const det = open.has(String(r.id)) ? `<tr><td colspan="4"><div class="steps" id="steps-${r.id}"><div class="skel"></div></div>${r.screenshot ? `<img style="max-width:100%;border:1px solid var(--line);border-radius:var(--radius);margin-top:8px" src="/evidence/${esc(r.screenshot)}" alt="실패 당시 화면 캡처">` : ''}<p class="sub dev">증적: <a href="/evidence/${esc(r.evidence_rel)}/" target="_blank" rel="noopener">${esc(r.evidence_rel)}</a></p></td></tr>` : '';
+    return row + det;
+  }).join('') : `<tr><td colspan="4" class="empty"><b>${query ? '검색 결과가 없습니다' : '아직 검사 기록이 없습니다'}</b></td></tr>`;
+  $('more').innerHTML = visRuns.length > 20 ? `<button class="btn" id="moreBtn">${showAll ? '최근 20건만 보기' : `${visRuns.length - 20}건 더 보기`}</button>` : '';
+  const mb = $('moreBtn'); if (mb) mb.onclick = () => { showAll = !showAll; render(); };
+  document.querySelectorAll('#runs tr.click').forEach(tr => tr.onclick = () => { const id = tr.dataset.id; open.has(id) ? open.delete(id) : open.add(id); render(); });
+  for (const id of open) { const el = $('steps-' + id); const tr = document.querySelector(`#runs tr[data-id="${id}"]`); if (el && tr && el.dataset.loaded !== '1') loadSteps(el, tr.dataset.dir); }
+
+  $('features').innerHTML = feats.length ? feats.map(f => `<tr><td><div class="t">${esc(f.summary || f.id)}</div><div class="sub">${esc(f.id)} ${dev(f.sha)}</div></td><td>${st(READY, f.readiness)}<div class="sub">${f.handled ? '관련 검사 실행 완료' : '관련 검사 예정'}</div></td><td class="hide-sm">${esc(f.shipped_at)}</td></tr>`).join('')
+    : `<tr><td colspan="3" class="empty"><b>최근 배포된 변경이 없습니다</b>저장소에 새 커밋이 배포되면 여기에 표시됩니다.</td></tr>`;
+}
+
+async function loadSteps(el, dir) {
+  if (!dir) { el.textContent = '상세 기록이 없습니다.'; el.dataset.loaded = '1'; return; }
+  try {
+    const r = await fetch('/api/run/steps?dir=' + encodeURIComponent(dir), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const s = await r.json(); const steps = s.steps || [];
+    const flowOf = (n) => { const m = /^flow:([^/]+)\//.exec(n || ''); return m ? m[1] : ''; };
+    el.innerHTML = steps.map(x => {
+      const flow = flowOf(x.name);
+      const detail = x.ok ? (x.expected || x.actual || '') : [x.expected ? `기대: ${x.expected}` : '', x.actual ? `실제: ${x.actual}` : '', x.error || ''].filter(Boolean).join(' / ');
+      return `<div class="step"><span class="n">${x.index}</span>${st({ ok: ['성공', 'ok'], fail: ['실패', 'bad'] }, x.ok ? 'ok' : 'fail')}<span><b>${esc(STEP[x.kind] || x.kind)}</b>${flow ? ` <span class="sub">공통 절차 ${esc(flow)}</span>` : ''} ${dev(x.name || x.kind)}<div class="how">${esc(detail)}</div></span></div>`;
+    }).join('') || '<div class="empty">기록된 단계가 없습니다.</div>';
+    el.dataset.loaded = '1';
+  } catch (e) { el.innerHTML = `<div class="errbox"><span>단계 기록을 불러오지 못했습니다 (${esc(e.message)})</span><button class="btn" onclick="this.closest('.steps').dataset.loaded='';render()">다시 시도</button></div>`; }
+}
+
+function renderAgent(a) {
+  if (!a) { $('agentMeta').textContent = '배포된 새 기능을 직접 살펴보고 검사 항목을 제안합니다'; $('agentBody').innerHTML = '<div class="empty"><b>아직 실행된 적이 없습니다</b>새 기능이 배포되거나 vigil discover 를 실행하면 활동이 여기에 표시됩니다.</div>'; return; }
+  const status = { running: ['지금 일하는 중', 'ok'], done: ['작업 완료', 'muted'], stale: ['응답 없음, 중단된 듯', 'warn'] };
+  $('agentMeta').textContent = `대상 ${a.feature} · 마지막 활동 ${ago(a.updated_at)}`;
+  const calls = (a.tool_calls || []).slice().reverse();
+  $('agentBody').innerHTML = `
+    <div class="agent-head">${st(status, a.status)}${a.decision ? `<span class="sub">결론</span>${st(DECISION, a.decision)}` : ''}${a.candidates ? `<span class="sub">제안한 검사 ${a.candidates}개</span>` : ''}${a.sandbox ? `<span class="sub">격리 환경 ${esc(a.sandbox)}</span>` : ''}${a.attempts > 1 ? `<span class="sub">모델 재시도 ${a.attempts}회</span>` : ''}</div>
+    ${a.retries && a.retries.length ? `<div class="sub">AI 모델 오류가 있었습니다: ${esc(a.retries[a.retries.length - 1])}</div>` : ''}
+    ${a.last_text ? `<div class="msg">${esc(a.last_text)}</div>` : ''}
+    <div class="sub" style="padding:6px 0">브라우저에서 한 일 ${calls.length}가지, 최근 것이 위</div>
+    <div class="acts">${calls.map(c => { const [tag, t] = toolLine(c); return `<div class="act${c.ok === false ? ' fail' : ''}"><span class="tag">${esc(tag)}</span><div><b>${esc(t)}</b> <span class="sub">${c.ok === undefined ? '진행 중' : c.ok ? '' : '실패'}</span> ${dev('#' + c.n + ' ' + c.args)}${c.preview ? `<div class="out${c.ok === false ? '' : ' dev'}">${esc(c.preview)}</div>` : ''}</div></div>`; }).join('') || '<div class="empty">아직 브라우저를 조작하지 않았습니다.</div>'}</div>
+    <p class="sub dev">증적 폴더: <a href="/evidence/${esc(a.dir)}/" target="_blank" rel="noopener">${esc(a.dir)}</a></p>`;
+}
+
+refresh();
+setInterval(refresh, 3000);
+setInterval(() => { if (data) render(); }, 30000); // relative times stay honest
+
+// ---- 검사 시간대 (active hours) ------------------------------------------------
+// The only control on this dashboard that writes. It PUTs a row into
+// scheduler_state; the `loop` process (a different process, sharing only the
+// SQLite file) picks it up on its next tick.
+const WD = [0, 1, 2, 3, 4, 5, 6];
+const WD_KO = ['일', '월', '화', '수', '목', '금', '토'];
+let winDirty = false;
+
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 3000); }
+
+function winForm() {
+  return { enabled: $('winEnabled').checked, days: WD.filter(d => $('wd' + d).checked), from: $('winFrom').value, to: $('winTo').value, tz: $('winTz').value.trim() };
+}
+function winFill(w) {
+  $('winEnabled').checked = !!w.enabled;
+  WD.forEach(d => $('wd' + d).checked = (w.days || []).includes(d));
+  $('winFrom').value = w.from || '08:00';
+  $('winTo').value = w.to || '19:00';
+  $('winTz').value = w.tz || '';
+}
+function winDaysText(days) {
+  const d = (days || []).slice().sort();
+  if (d.length === 7) return '매일';
+  if (d.join() === '1,2,3,4,5') return '평일';
+  if (d.join() === '0,6') return '주말';
+  return d.map(n => WD_KO[n]).join('·') || '요일 없음';
+}
+function renderWindow(w) {
+  if (!w) return;
+  const openNow = w.enabled ? w.active_now : true;
+  const detail = w.enabled
+    ? `${winDaysText(w.days)} ${esc(w.from)}–${esc(w.to)} <span class="dev mono">${esc(w.zone)}</span>`
+    : '시간대 제한 없음 · 24시간 검사합니다';
+  const nextAt = w.next_change ? ` · 다음 변경 ${esc(w.next_change)}` : '';
+  $('winStatus').innerHTML = st({ on: ['지금 검사함', 'ok'], off: ['지금은 검사 중지', 'muted'] }, openNow ? 'on' : 'off')
+    + `<span class="sub">${detail}${nextAt}</span>`;
+  $('winSource').textContent = w.source === 'override' ? '이 화면에서 지정한 값' : '설정 파일(vigil.yaml) 값';
+  // The overview polls on a timer; refilling would wipe a half-typed edit.
+  if (!winDirty) winFill(w);
+}
+async function winSend(method, body) {
+  const opt = { method, cache: 'no-store' };
+  if (body) { opt.headers = { 'Content-Type': 'application/json' }; opt.body = JSON.stringify(body); }
+  const r = await fetch('/api/schedule/window', opt);
+  const text = await r.text();
+  if (!r.ok) throw new Error(text.trim() || ('HTTP ' + r.status));
+  return JSON.parse(text);
+}
+document.querySelectorAll('#window input').forEach(el => el.addEventListener('input', () => { winDirty = true; }));
+$('winSave').onclick = async () => {
+  try {
+    const w = await winSend('POST', winForm());
+    winDirty = false; renderWindow(w);
+    if (data) data.window = w;
+    toast('검사 시간대를 저장했습니다. 다음 확인 주기부터 적용됩니다');
+  } catch (e) { toast('저장하지 못했습니다: ' + e.message); }
+};
+$('winReset').onclick = async () => {
+  try {
+    const w = await winSend('DELETE');
+    winDirty = false; renderWindow(w);
+    if (data) data.window = w;
+    toast('설정 파일 값으로 되돌렸습니다');
+  } catch (e) { toast('되돌리지 못했습니다: ' + e.message); }
+};
+
+</script>
+</body>
+</html>

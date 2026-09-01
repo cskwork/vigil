@@ -1,0 +1,22 @@
+# built binary (root only; cmd/vigil/ is source)
+/vigil
+# local state, evidence, downloaded browsers
+.vigil/
+/evidence/
+bin/
+*.db
+*.db-wal
+*.db-shm
+*.log
+# machine-specific overrides
+vigil.local.yaml
+.DS_Store
+.playwright-cli/
+# domain-specific, local only (ship *.example.* and examples/ instead)
+/vigil.yaml
+/url.md
+/scenarios/
+/flows/
+/features/requests/*
+!/features/requests/example.yaml
+/.superdesign/dashboard/render/
