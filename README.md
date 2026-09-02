@@ -1,10 +1,108 @@
+<div align="center">
+
 # vigil
 
-`vigil` is a Go tool for continuous QA of an already-deployed web application. It watches shipped Git features, waits until the deployment actually serves that revision, and then verifies behaviour on the real deployed URL with deterministic YAML scripts executed on Lightpanda. A Browser Agent (pi with `zai/glm-5.3-flash`) is launched only for new or uncertain behaviour, and Chromium is used only to confirm browser ambiguity or when rendering is part of the oracle. `vigil` never runs the target application locally and never modifies target code; it reports evidence and incidents.
+**Continuous browser QA that grows its own coverage.**
+
+Point it at a deployed web app. It watches your ships, proves them in a real browser,
+files evidence for every run — and a supervised AI loop keeps writing new test
+scenarios until every reachable flow has one.
+
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Runs on](https://img.shields.io/badge/browsers-Lightpanda%20·%20Chromium-orange)](#architecture)
+
+</div>
+
+---
+
+## Why vigil
+
+Most E2E suites test what somebody remembered to write, break when the page
+changes, and say "assertion failed" without evidence. vigil inverts each of
+those:
+
+- **Coverage grows itself.** A supervisor loop reads the QA state on a slow
+  tick, asks a model where scenarios are missing, and turns the answer into
+  browser explorations. Give it one URL; the route map fills itself in from
+  wherever browsers actually go.
+- **The model proposes, code decides.** Every action the model suggests is
+  re-validated by deterministic Go before it becomes a job. There is no verb
+  for deleting coverage — asking for one is refused and logged. A model outage
+  never stops deterministic QA.
+- **Broken scripts repair themselves.** A failed validation gets bounded agent
+  rewrites (`policy.agent_fix_attempts`) before a human ever sees it. Brittle
+  locator? The agent reads the failure and rewrites the step.
+- **Every run leaves evidence.** Console, network, DOM and screenshots per run;
+  failures become reproducible incident reports, not a red X.
+- **Deploy-aware.** Scenarios re-run the moment a shipped commit is actually
+  served (asset-version gate), so "did the deploy break it?" has an answer
+  minutes after the deploy.
+
+## Give it one URL
+
+```yaml
+target:
+  base_url: https://your-app.example.com
+supervisor:
+  enabled: true
+```
+
+Then watch it work:
+
+```text
+loop: supervisor every 15m0s (model=zai/glm-5.3-flash dry_run=false max_actions=5)
+supervisor: discover_route "/app" applied (7 of 7 scenarios live on the entry
+            route; the interior is where the next coverage gap is)
+supervisor: 2 action(s) proposed, 2 applied, 0 refused, 2 gap(s) named
+supervisor: 6 new route(s) discovered (23 known)
+scenario home-deep-link-requires-auth: validation failed; agent fix attempt 1/3
+agent job 12: candidate teacher-home-dashboard → SOAK (validated by runner)
+```
+
+Within an hour of first launch against a real application, vigil discovered 23
+routes and authored 16 scenario candidates from a single seeded path — pinning
+one test identity so every scenario reproduces, filling forms where the flow
+allows it, and staying inside the host allowlist.
+
+## Safety rails
+
+The supervisor is deliberately the *weakest* actor in the system:
+
+| Rail | Effect |
+|---|---|
+| Verb allowlist | 6 verbs only; `delete`/`retire`/`purge` refused **by name** and logged |
+| Host allowlist | An off-target URL is rejected outright, at harvest and at validation |
+| Deny path patterns | `logout`, `delete`, `purge`… are never explored — a wandering browser must not end its session or press something irreversible |
+| Mutation policy | `read-only` → `reversible` → `destructive` (off unless `policy.allow_destructive`) |
+| Budgets | Hourly task budgets per actor; the planner cannot starve discover/repair |
+| Active hours | A weekly window (e.g. weekdays 08:00–19:00) gates all cadence work, editable live from the dashboard |
+| Quarantine guard | The one coverage-reducing verb is capped per plan and refused if it would blind an area completely |
+| Oracle policy | Observed behaviour either waits for a human (`needs_review`) or must survive validation + clean SOAK runs (`soak`) before it gates anything |
+
+## Quickstart
+
+```bash
+git clone https://github.com/cskwork/vigil
+cd vigil && go build ./cmd/vigil
+./vigil doctor --install                 # fetches the Lightpanda browser
+cp vigil.example.yaml vigil.yaml         # point target.base_url at your app
+./vigil loop --ui 127.0.0.1:8787         # scheduler + live dashboard
+```
+
+The dashboard at `:8787` shows verification results, running jobs, the
+coverage-growth panel and the schedule window — readable by non-developers.
 
 ## Status
 
-Phase 1 of the PRD (lean local product) is implemented and exercised end to end: Git feature ingest, deployment gate, deterministic Lightpanda/Chromium runner, failure classification, candidate lifecycle, Browser Agent (pi + nono sandbox), scheduler with budgets and locks, evidence/incidents, CLI and the live web board. Not wired yet (accepted by the config, ignored at runtime): `workers.chromium`, `budget.chromium_minutes_per_hour` enforcement (minutes are recorded), `runtime.mode: distributed`, `state.type: postgres`, `evidence.type: s3`.
+The full local product is implemented and exercised end to end against a real
+deployment: git feature ingest, deployment gate, deterministic
+Lightpanda/Chromium runner, failure classification, candidate lifecycle,
+Browser Agent (pi + nono sandbox), the autonomous coverage supervisor,
+scheduler with budgets/locks/active-hours, evidence/incidents, CLI and the live
+web board. Accepted by the config but ignored at runtime: `workers.chromium`,
+`budget.chromium_minutes_per_hour` enforcement (minutes are recorded),
+`runtime.mode: distributed`, `state.type: postgres`, `evidence.type: s3`.
 
 ## Architecture
 
@@ -49,7 +147,7 @@ Git ship/change
 | `cmd/vigil` | CLI: global flags, command dispatch, `doctor` checks |
 | `internal/ingest` | Turns `generic-git`, `file` and `sdlc-kit` signals into normalized `FeatureEvent`s |
 | `internal/gate` | Deployment readiness gate (`delay`, `asset_version`, `version_endpoint`) |
-| `internal/orchestrator` | Decision table, impact selection, post-run lifecycle (soak/promote, quarantine, repair, Chromium confirm, incidents), agent job handling |
+| `internal/orchestrator` | Decision table, impact selection, post-run lifecycle (soak/promote, quarantine, repair, Chromium confirm, incidents), agent job handling, coverage supervisor (plan → validate → apply, stale-review reconcile) |
 | `internal/scheduler` | Continuous loop: scan/gate/orchestrate, due selection, budgets, locks, workers, cheap retry, PASS marker |
 | `internal/runner` | Executes DSL steps over CDP; captures console, network, DOM, screenshot |
 | `internal/browser` | Lightpanda (`serve` attach-or-launch) and Chromium providers |
@@ -387,7 +485,7 @@ flow:
   version: 1
   title: Open the training entry page and wait for the school tabs
 steps:
-  - goto: /lms-web/training-entry
+  - goto: /app/entry
   - wait_for: { by: css, value: ".school-btn-wrap button", timeout: 15s }
 ```
 
