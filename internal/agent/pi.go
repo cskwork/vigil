@@ -12,11 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"vigil/internal/dsl"
 	"regexp"
 	"strings"
 	"syscall"
 	"time"
+	"vigil/internal/dsl"
 
 	"gopkg.in/yaml.v3"
 

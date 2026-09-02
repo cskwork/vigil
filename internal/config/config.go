@@ -39,18 +39,18 @@ type Config struct {
 	Targets []Target `yaml:"-"`
 
 	Discovery struct {
-		Adapter      string          `yaml:"adapter"` // generic-git | sdlc-kit | file
-		Branch       string          `yaml:"branch"`  // generic-git: remote branch to watch, e.g. origin/staging
+		Adapter string `yaml:"adapter"` // generic-git | sdlc-kit | file
+		Branch  string `yaml:"branch"`  // generic-git: remote branch to watch, e.g. origin/staging
 		// IssueKeyPattern groups commits by the issue key in their subject.
 		// Uppercase-only by default so "utf-8" in a subject is not read as a key;
 		// set an explicit (?i) pattern if your team writes keys in lower case.
-		IssueKeyPattern string `yaml:"issue_key_pattern"`
-		Fetch        bool            `yaml:"fetch"`
-		PathPrefixes []string        `yaml:"path_prefixes"` // only commits touching these prefixes become features
-		RouteMap     []RouteMapEntry `yaml:"route_map"`
-		FeaturesDir  string          `yaml:"features_dir"` // file adapter: directory of FeatureEvent yaml files
-		PollInterval Duration        `yaml:"poll_interval"`
-		HistoryLimit int             `yaml:"history_limit"` // import --history rate limit
+		IssueKeyPattern string          `yaml:"issue_key_pattern"`
+		Fetch           bool            `yaml:"fetch"`
+		PathPrefixes    []string        `yaml:"path_prefixes"` // only commits touching these prefixes become features
+		RouteMap        []RouteMapEntry `yaml:"route_map"`
+		FeaturesDir     string          `yaml:"features_dir"` // file adapter: directory of FeatureEvent yaml files
+		PollInterval    Duration        `yaml:"poll_interval"`
+		HistoryLimit    int             `yaml:"history_limit"` // import --history rate limit
 	} `yaml:"discovery"`
 
 	Deployment struct {
@@ -110,6 +110,9 @@ type Config struct {
 		BrowserMinutesPerHour  int `yaml:"browser_minutes_per_hour"`
 		ChromiumMinutesPerHour int `yaml:"chromium_minutes_per_hour"`
 		AgentTasksPerHour      int `yaml:"agent_tasks_per_hour"`
+		// SupervisorTasksPerHour is separate from AgentTasksPerHour so the slow
+		// coverage loop cannot starve discover/verify/repair.
+		SupervisorTasksPerHour int `yaml:"supervisor_tasks_per_hour"`
 	} `yaml:"budget"`
 
 	Policy struct {
@@ -117,11 +120,17 @@ type Config struct {
 		SoakPasses       int  `yaml:"soak_passes"`      // clean runs before ACTIVE
 		QuarantineAfter  int  `yaml:"quarantine_after"` // consecutive flakes before QUARANTINED
 		RetryOnFail      int  `yaml:"retry_on_fail"`    // cheap safe retries before classify
+		// AgentFixAttempts: how many times the Browser Agent may rewrite a
+		// scenario whose validation run failed, before it goes to a human.
+		// 1 = the old behaviour (one shot, then NEEDS_REVIEW).
+		AgentFixAttempts int `yaml:"agent_fix_attempts"`
 		// ObservationOracle: needs_review (PRD default: observation alone is not an oracle) | soak
 		ObservationOracle string `yaml:"observation_oracle"`
 		// StructuralDupThreshold: Jaccard similarity of major actions above which a candidate is DUPLICATE.
 		StructuralDupThreshold float64 `yaml:"structural_dup_threshold"`
 	} `yaml:"policy"`
+
+	Supervisor Supervisor `yaml:"supervisor"`
 
 	Schedule struct {
 		Soak           Duration `yaml:"soak"`
@@ -434,6 +443,9 @@ func (c *Config) applyDefaults() {
 	if c.Policy.RetryOnFail == 0 {
 		c.Policy.RetryOnFail = 1
 	}
+	if c.Policy.AgentFixAttempts <= 0 {
+		c.Policy.AgentFixAttempts = 1
+	}
 	def(&c.Schedule.Soak, 10*time.Minute)
 	def(&c.Schedule.P0, 15*time.Minute)
 	def(&c.Schedule.P1, 60*time.Minute)
@@ -443,6 +455,22 @@ func (c *Config) applyDefaults() {
 		c.Discovery.IssueKeyPattern = DefaultIssueKeyPattern
 	}
 	def(&c.Schedule.Tick, 10*time.Second)
+	if c.Supervisor.Enabled {
+		def(&c.Supervisor.Tick, 15*time.Minute)
+		def(&c.Supervisor.Timeout, 10*time.Minute)
+		if c.Supervisor.MaxActions == 0 {
+			c.Supervisor.MaxActions = 5
+		}
+		if c.Supervisor.MaxQuarantinePerPlan == 0 {
+			c.Supervisor.MaxQuarantinePerPlan = 1
+		}
+		if c.Budget.SupervisorTasksPerHour == 0 {
+			c.Budget.SupervisorTasksPerHour = 4
+		}
+		if c.Supervisor.MaxSiteRoutes == 0 {
+			c.Supervisor.MaxSiteRoutes = 500
+		}
+	}
 	if c.Schedule.ActiveHours.Enabled {
 		if c.Schedule.ActiveHours.From == "" {
 			c.Schedule.ActiveHours.From = "08:00"
@@ -510,6 +538,9 @@ func (c *Config) validate() error {
 	}
 	if err := c.Schedule.ActiveHours.Validate(); err != nil {
 		return fmt.Errorf("schedule.active_hours: %w", err)
+	}
+	if err := c.Supervisor.Validate(); err != nil {
+		return fmt.Errorf("supervisor: %w", err)
 	}
 	if _, err := regexp.Compile(c.Discovery.IssueKeyPattern); err != nil {
 		return fmt.Errorf("discovery.issue_key_pattern: %w", err)

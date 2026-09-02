@@ -35,6 +35,7 @@
     <a href="#now">진행 상황 <span class="cnt" id="nNow"></span></a>
     <a href="#ai">AI 도우미</a>
     <a href="#window">검사 시간대</a>
+    <a href="#supervisor">커버리지 확장</a>
     <a href="#checks">검사 항목 <span class="cnt" id="nChecks"></span></a>
     <a href="#issues">발견된 문제 <span class="cnt" id="nIssues"></span></a>
     <a href="#history">검사 기록</a>
@@ -103,6 +104,11 @@
           </div>
           <p class="sub">끝 시각을 시작보다 이르게 두면 자정을 넘기는 시간대가 됩니다 (예: 22:00 → 06:00).</p>
         </div>
+      </section>
+
+      <section id="supervisor" class="panel" aria-label="커버리지 확장">
+        <header><h2>커버리지 확장</h2><p>주기적으로 "어디에 검사가 없는가"를 판단해 탐색을 지시합니다. 제안은 전부 코드 검증을 거치며, 통과한 것만 실제 작업이 됩니다</p></header>
+        <div class="body" id="supBody"><div class="skel"></div><div class="skel" style="width:70%"></div></div>
       </section>
 
       <section id="checks" class="panel" aria-label="검사 항목">
@@ -264,6 +270,7 @@ function render() {
 
   renderAgent(o.agent);
   renderWindow(o.window);
+  renderSupervisor(o.supervisor);
 
   const filt = (s) => !query || (s.title || '').toLowerCase().includes(query) || (s.id || '').toLowerCase().includes(query);
   const visScs = scs.filter(filt);
@@ -395,6 +402,50 @@ $('winReset').onclick = async () => {
     toast('설정 파일 값으로 되돌렸습니다');
   } catch (e) { toast('되돌리지 못했습니다: ' + e.message); }
 };
+
+
+// ---- 커버리지 확장 (supervisor) ------------------------------------------------
+const VERB = {
+  discover_route: ['새 영역 탐색', 'ok'], repair_script: ['검사 스크립트 수리', 'warn'],
+  validate_candidate: ['후보 검증', 'info'], run_scenario: ['지금 실행', 'info'],
+  raise_cadence: ['검사 주기 조정', 'info'], quarantine: ['일시 제외', 'warn'],
+};
+function renderSupervisor(s) {
+  if (!s) return;
+  if (!s.enabled) {
+    $('supBody').innerHTML = `<div class="empty"><b>꺼져 있습니다</b>vigil.yaml 의 <span class="mono">supervisor.enabled: true</span> 로 켭니다. 켜면 ${esc(s.tick)}마다 검사가 없는 영역을 찾습니다.</div>`;
+    return;
+  }
+  const mode = s.dry_run
+    ? `<span class="st st-muted"><i></i>연습 모드</span> <span class="sub">계획만 세우고 실행하지 않습니다</span>`
+    : `<span class="st st-ok"><i></i>동작 중</span> <span class="sub">${esc(s.tick)}마다 · 모델 ${esc(s.model)}</span>`;
+  if (!s.ran) {
+    $('supBody').innerHTML = `<div class="win-status">${mode}</div><div class="empty"><b>아직 첫 판단 전입니다</b>${esc(s.tick)} 안에 첫 결과가 여기 표시됩니다.</div>`;
+    return;
+  }
+  const rows = (s.verdicts || []).map(v => {
+    const [label, tone] = VERB[v.action.verb] || [v.action.verb, 'muted'];
+    const state = v.applied ? '<span class="st st-ok"><i></i>실행됨</span>'
+      : v.accepted ? '<span class="st st-info"><i></i>승인, 미실행</span>'
+      : '<span class="st st-muted"><i></i>거부</span>';
+    const why = v.accepted ? esc(v.action.reason) : `<b>거부 사유</b> ${esc(v.reason)}`;
+    return `<tr><td><div class="t">${esc(label)}</div><div class="sub">${dev(v.action.verb)} ${esc(v.action.target)}</div></td>
+      <td>${state}</td><td class="hide-sm"><div class="sub">${why}</div></td></tr>`;
+  }).join('');
+  const gaps = (s.coverage_gaps || []).length
+    ? `<p class="sub"><b>검사가 없다고 본 곳:</b> ${(s.coverage_gaps).map(esc).join(' · ')}</p>` : '';
+  const routes = s.route_count
+    ? `<details><summary class="sub">브라우저가 실제로 가 본 경로 ${s.route_count}개</summary><p class="sub mono">${(s.known_routes||[]).map(esc).join('<br>')}</p></details>` : '';
+  $('supBody').innerHTML = `
+    <div class="win-status">${mode}<span class="sub">${ago(s.at)} · 제안 ${(s.verdicts||[]).length} · 실행 ${s.applied} · 거부 ${s.refused}</span></div>
+    ${s.skipped ? `<div class="empty"><b>이번 차례는 건너뜀</b>${esc(s.skipped)}</div>` : ''}
+    ${s.assessment ? `<p>${esc(s.assessment)}</p>` : ''}
+    ${gaps}
+    ${s.saturated ? '<p class="sub">모델은 더 이상 빈 곳이 없다고 봅니다. 그래도 탐색은 계속됩니다.</p>' : ''}
+    ${rows ? `<table><thead><tr><th>제안</th><th>결과</th><th class="hide-sm">이유</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="sub">이번엔 제안이 없었습니다.</p>'}
+    ${routes}
+    ${s.evidence_dir ? `<p class="sub dev">증적: <span class="mono">${esc(s.evidence_dir)}</span></p>` : ''}`;
+}
 
 </script>
 </body>

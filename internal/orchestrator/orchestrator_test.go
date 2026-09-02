@@ -42,12 +42,16 @@ type fakeAgent struct {
 	res  *agent.Result
 	err  error
 	reqs []agent.Request
+	plan *agent.Plan
 }
 
 func (f *fakeAgent) Run(_ context.Context, req agent.Request, dir string) (*agent.Result, error) {
 	f.reqs = append(f.reqs, req)
 	_ = os.MkdirAll(dir, 0o755)
 	return f.res, f.err
+}
+func (f *fakeAgent) Plan(context.Context, string, string) (*agent.Plan, error) {
+	return f.plan, f.err
 }
 func (f *fakeAgent) Doctor(context.Context) error          { return nil }
 func (f *fakeAgent) Reparse(string) (*agent.Result, error) { return nil, nil }

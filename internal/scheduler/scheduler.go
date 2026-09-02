@@ -43,6 +43,7 @@ type Orchestrator interface {
 	EnqueueForFeature(ctx context.Context, f *model.Feature, d *orchestrator.Decision) error
 	AfterRun(ctx context.Context, job *model.Job, run *model.Run, res *runner.Result) error
 	HandleAgentJob(ctx context.Context, job *model.Job) error
+	SupervisorTick(ctx context.Context) (*orchestrator.SupervisorResult, error)
 }
 
 // Gate is the subset of *gate.Gate the scheduler needs.
@@ -432,9 +433,21 @@ func (s *Scheduler) Loop(ctx context.Context) error {
 	tick := time.NewTicker(s.cfg.Schedule.Tick.Duration)
 	poll := time.NewTicker(s.cfg.Discovery.PollInterval.Duration)
 	prune := time.NewTicker(pruneEvery)
+	// A disabled supervisor still gets a ticker so the select stays simple; the
+	// tick itself is a no-op. Its interval is minutes, so the cost is nil.
+	supTick := s.cfg.Supervisor.Tick.Duration
+	if supTick <= 0 {
+		supTick = 15 * time.Minute
+	}
+	supervise := time.NewTicker(supTick)
 	defer tick.Stop()
 	defer poll.Stop()
 	defer prune.Stop()
+	defer supervise.Stop()
+	if s.cfg.Supervisor.Enabled {
+		s.logf("loop: supervisor every %s (model=%s dry_run=%v max_actions=%d)", supTick,
+			s.cfg.Supervisor.EffectiveModel(s.cfg.Agent.Model), s.cfg.Supervisor.DryRunEnabled(), s.cfg.Supervisor.MaxActions)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -450,6 +463,8 @@ func (s *Scheduler) Loop(ctx context.Context) error {
 			}
 		case <-prune.C:
 			s.prune()
+		case <-supervise.C:
+			s.superviseOnce(ctx)
 		}
 	}
 }
@@ -463,6 +478,40 @@ func (s *Scheduler) reapAndTick(ctx context.Context) {
 	if err := s.Tick(ctx); err != nil && ctx.Err() == nil {
 		s.logf("%v", err)
 	}
+}
+
+// superviseOnce runs one coverage-planning tick. It shares the active-hours
+// window with cadence work: the supervisor enqueues browser jobs, so letting it
+// run at 03:00 would defeat the window it is subject to.
+func (s *Scheduler) superviseOnce(ctx context.Context) {
+	if !s.cfg.Supervisor.Enabled || s.orch == nil {
+		return
+	}
+	if w := s.ActiveHours(ctx); !w.Allows(s.Now()) {
+		return
+	}
+	res, err := s.orch.SupervisorTick(ctx)
+	if err != nil && ctx.Err() == nil {
+		s.logf("%v", err) // the orchestrator's errors already say "supervisor:"
+		return
+	}
+	if res == nil {
+		return
+	}
+	if res.Skipped != "" {
+		s.logf("supervisor: skipped (%s)", res.Skipped)
+		return
+	}
+	applied, refused := 0, 0
+	for _, v := range res.Verdicts {
+		if v.Applied {
+			applied++
+		} else if !v.Accepted {
+			refused++
+		}
+	}
+	s.logf("supervisor: %d action(s) proposed, %d applied, %d refused, %d gap(s) named%s",
+		len(res.Verdicts), applied, refused, len(res.CoverageGaps), map[bool]string{true: " [dry-run]"}[res.DryRun])
 }
 
 func (s *Scheduler) prune() {

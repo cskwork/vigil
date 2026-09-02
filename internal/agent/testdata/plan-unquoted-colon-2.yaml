@@ -1,0 +1,16 @@
+assessment: All 7 scenarios are green with no drift or flakiness, and all of them cluster on a single route: /lms-web/training-entry. The briefing explicitly lists app.routing as a known area with zero scenarios, so that is the clearest gap. Beyond it, coverage is heavily one-sided: the teacher-entry scenario proves a new tab opens lms-web after auth, but nothing tests what happens inside the LMS, and the getUser scenario renders a student entry button whose flow is never exercised. The next value is in breadth (new areas), not more variations of training entry.
+coverage_gaps:
+  - app.routing (declared known area, zero scenarios)
+  - /lms-web interior after teacher authentication (only tab-opening is tested)
+  - student entry flow (button is rendered per getUser scenario, flow untested)
+actions:
+  - verb: discover_route
+    target: app.routing
+    reason: The briefing lists app.routing under known_areas_with_no_scenario; it is the only declared area with zero coverage, so route discovery there is the highest-value action.
+  - verb: discover_route
+    target: /lms-web
+    reason: training-entry-teacher-entry-opens-lms confirms lms-web opens in a new tab after auth, but no scenario covers anything inside it; the briefing says known areas are a starting point, not a boundary.
+  - verb: discover_route
+    target: /lms-web/training-entry?entry=student
+    reason: training-entry-user-list-api shows a student entry button is rendered from the getUser response; a sibling entry path to the teacher flow likely exists and has no scenarios.
+saturated: false

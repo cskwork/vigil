@@ -20,3 +20,7 @@ vigil.local.yaml
 /features/requests/*
 !/features/requests/example.yaml
 /.superdesign/dashboard/render/
+# legacy names, pending deletion; keep ignored so `git add -A` cannot
+# pull the old domain config into a release tree
+/qa-flow
+/qa-flow.yaml

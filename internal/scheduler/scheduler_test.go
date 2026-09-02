@@ -37,12 +37,27 @@ func (f *fakeRunner) Run(ctx context.Context, spec runner.Spec) (*runner.Result,
 }
 
 type fakeOrch struct {
-	mu       sync.Mutex
-	planned  []string
-	enqueued []string
-	afterRun []model.Outcome
-	agent    []int64
-	afterErr error
+	mu               sync.Mutex
+	planned          []string
+	enqueued         []string
+	afterRun         []model.Outcome
+	agent            []int64
+	afterErr         error
+	supervised       int
+	supervisorResult *orchestrator.SupervisorResult
+}
+
+func (o *fakeOrch) SupervisorTick(context.Context) (*orchestrator.SupervisorResult, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.supervised++
+	return o.supervisorResult, nil
+}
+
+func (o *fakeOrch) supervisedCount() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.supervised
 }
 
 func (o *fakeOrch) PlanFeature(ctx context.Context, f *model.Feature) (*orchestrator.Decision, error) {

@@ -92,6 +92,8 @@ type Result struct {
 // Adapter launches one bounded Browser Agent task.
 type Adapter interface {
 	Run(ctx context.Context, req Request, evidenceDir string) (*Result, error)
+	// Plan runs one tool-less supervise task: briefing in, bounded plan out.
+	Plan(ctx context.Context, briefing, evidenceDir string) (*Plan, error)
 	// Reparse rebuilds the result files of a finished run from its transcript.
 	Reparse(evidenceDir string) (*Result, error)
 	// Doctor checks provider/tool availability without spending a task.

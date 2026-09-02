@@ -10,10 +10,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"vigil/internal/agent"
 	"sort"
 	"strings"
 	"time"
+	"vigil/internal/agent"
 
 	"vigil/internal/dsl"
 	"vigil/internal/ingest"

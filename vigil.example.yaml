@@ -59,13 +59,15 @@ budget:
   browser_minutes_per_hour: 60
   chromium_minutes_per_hour: 5
   agent_tasks_per_hour: 4
+  supervisor_tasks_per_hour: 4   # 감독자 전용. agent 예산을 굶기지 않는다
 
 policy:
   allow_destructive: false
   soak_passes: 3
   quarantine_after: 3
   retry_on_fail: 1
-  observation_oracle: needs_review
+  agent_fix_attempts: 1     # 검증 실패 시 에이전트 자가수정 횟수. 1 = 한 번 실패하면 바로 사람
+  observation_oracle: needs_review   # soak = 관찰 기반도 검증→SOAK→자동 ACTIVE (정책 완화 시 기존 대기분도 자동 재검증)
 
 schedule:
   soak: 10m
@@ -83,6 +85,31 @@ schedule:
     from: "08:00"                     # 포함
     to: "19:00"                       # 미포함
     tz: Asia/Seoul                    # 비우면 실행 머신의 로컬 시간대
+
+# 커버리지 확장 루프. 느린 주기로 상태를 읽고 "어디에 시나리오가 없는가"를
+# 모델에게 물어, 제한된 동사로만 된 계획을 받는다. 계획의 모든 항목은
+# 결정론 코드가 다시 검증하며, 통과한 것만 작업이 된다.
+#
+# 삭제 동사는 존재하지 않는다. 커버리지는 추가되거나 일시 중지될 뿐,
+# 감독자가 제거하지 못한다. 요청하면 거부되고 로그에 남는다.
+supervisor:
+  enabled: false                 # 켜기 전까지 동작 변화 없음
+  model: ""                      # 비우면 agent.model 사용
+  thinking: ""                   # 비우면 agent.thinking 사용
+  tick: 15m
+  max_actions: 5                 # 계획 1회당 실행 상한
+  max_quarantine_per_plan: 1     # 가장 위험한 동사의 상한
+  dry_run: true                  # 기본 true: 무엇을 하려는지 먼저 지켜본 뒤 끄기
+  timeout: 10m
+  # 아래는 전부 선택. base_url 과 allowed_hosts 만 있으면 알아서 찾아간다:
+  # 에이전트가 방문한 경로가 자동으로 목록에 쌓이고, 아직 안 가본 경로도
+  # 근거가 있으면 대상으로 삼을 수 있다. 울타리는 allowed_hosts 와 아래 패턴이다.
+  explore_mutation: read-only    # read-only | reversible | destructive(정책 필요)
+  fill_data: false               # true = 입력을 실제 값으로 채우고 결과까지 검증 (read-only 에선 무시)
+  accounts: []                   # 탐색이 입장할 고정 테스트 계정 이름. 비밀번호는 넣지 말 것
+  explore_routes: []             # 시작점 힌트(선택). 화이트리스트가 아니다
+  max_site_routes: 500           # 발견 경로 목록 상한. /user/42 같은 건 /user/:id 로 접힌다
+  deny_path_patterns: []         # 비우면 기본값: logout 계열 + delete/purge/destroy 계열
 
 agent:
   provider: pi

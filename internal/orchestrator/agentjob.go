@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,6 +29,11 @@ import (
 var ErrAgentUnavailable = errors.New("orchestrator: Browser Agent unavailable")
 
 const maxGitEvidence = 12 * 1024
+
+// ReasonObservationOracle marks a scenario parked only because policy said an
+// observed behaviour needs a human. The reconciler matches on it when the
+// policy is later relaxed, so it must stay stable.
+const ReasonObservationOracle = "oracle.source=observation: observation alone is not an oracle (PRD §5.1)"
 
 // GateOutcome records what happened to one agent-proposed script (audit trail;
 // written to <agent dir>/gate.json and scheduler_state gate:<scenario>).
@@ -89,6 +95,11 @@ func (o *Orchestrator) HandleAgentJob(ctx context.Context, job *model.Job) error
 	res, err := o.agent.Run(ctx, req, dir)
 	if err != nil {
 		return fmt.Errorf("agent job %d: %w", job.ID, err)
+	}
+	// Every place a browser actually reached is a candidate area to test later.
+	// This is what lets an operator hand over only a base URL.
+	if res != nil {
+		o.RecordSiteRoutes(ctx, res.VisitedURLs)
 	}
 	if res.ModelUnavailable {
 		at := o.now().Add(o.cfg.Agent.Backoff.Duration)
@@ -327,7 +338,7 @@ func (o *Orchestrator) gateCandidate(ctx context.Context, job *model.Job, feat *
 	reason := fmt.Sprintf("discovered by agent job %d (%s): %s", job.ID, job.Kind, firstLine(res.CoverageDelta))
 	switch {
 	case sc.Oracle.Source == "observation" && o.cfg.Policy.ObservationOracle == "needs_review":
-		g.State, g.Reason = model.StateNeedsReview, "oracle.source=observation: observation alone is not an oracle (PRD §5.1)"
+		g.State, g.Reason = model.StateNeedsReview, ReasonObservationOracle
 	case res.Ephemeral:
 		g.State, g.Reason = model.StateEphemeral, "agent marked behavior ephemeral; persisted for audit, never scheduled"
 	default:
@@ -350,18 +361,89 @@ func (o *Orchestrator) gateCandidate(ctx context.Context, job *model.Job, feat *
 		return o.recordGate(ctx, g)
 	}
 	if outcome == model.OutcomePass {
+		o.clearFixAttempts(ctx, id)
 		if err := o.st.SetScenarioState(ctx, o.cfg.Project.ID, id, model.StateSoak); err == nil {
 			_ = o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, id, o.now())
 			g.State, g.Reason = model.StateSoak, fmt.Sprintf("validated by runner; SOAK until %d clean passes", o.cfg.Policy.SoakPasses)
 		} else {
 			g.Reason = err.Error()
 		}
+	} else if n, limit, retried := o.retryFix(ctx, id, job, p, detail); retried {
+		// A failed validation usually means the agent wrote a brittle locator,
+		// not that a human is needed. Let it rewrite the script a bounded number
+		// of times before spending someone's attention.
+		g.State = model.StateCandidate
+		g.Reason = fmt.Sprintf("validation run %s: %s; AGENT_REPAIR attempt %d/%d enqueued", outcome, detail, n, limit)
 	} else {
 		_ = o.st.SetScenarioState(ctx, o.cfg.Project.ID, id, model.StateNeedsReview)
-		g.State, g.Reason = model.StateNeedsReview, fmt.Sprintf("validation run %s: %s", outcome, detail)
+		g.State = model.StateNeedsReview
+		g.Reason = fmt.Sprintf("validation run %s: %s", outcome, detail)
+		if limit > 1 {
+			g.Reason += fmt.Sprintf(" (after %d agent fix attempt(s))", limit)
+		}
 	}
 	o.logger.Printf("agent job %d: candidate %s → %s (%s)", job.ID, id, g.State, g.Reason)
 	return o.recordGate(ctx, g)
+}
+
+// fixAttemptsKey counts attempts in the current cycle; it governs the limit and
+// is cleared once the scenario validates.
+func fixAttemptsKey(scenarioID string) string { return "fix:" + scenarioID }
+
+// fixSeqKey is a sequence that never resets. It exists only to keep the repair
+// dedup key unique: reusing the cycle counter there means that after a reset the
+// new attempt collides with an old job and the retry is silently dropped.
+func fixSeqKey(scenarioID string) string { return "fixseq:" + scenarioID }
+
+func (o *Orchestrator) stateInt(ctx context.Context, key string) int {
+	raw, err := o.st.GetState(ctx, key)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(raw))
+	return n
+}
+
+// retryFix enqueues another AGENT_REPAIR when the budget of attempts allows it.
+// It reports the attempt number, the configured limit, and whether it retried.
+func (o *Orchestrator) retryFix(ctx context.Context, scenarioID string, job *model.Job, p jobPayload, detail string) (int, int, bool) {
+	limit := o.cfg.Policy.AgentFixAttempts
+	if limit <= 1 || o.agent == nil {
+		return 0, limit, false
+	}
+	used := o.stateInt(ctx, fixAttemptsKey(scenarioID))
+	if used+1 >= limit {
+		// This was the last allowed attempt; escalate.
+		return used, limit, false
+	}
+	next := used + 1
+	if err := o.st.SetState(ctx, fixAttemptsKey(scenarioID), strconv.Itoa(next)); err != nil {
+		return used, limit, false
+	}
+	j := &model.Job{
+		ProjectID:  o.cfg.Project.ID,
+		Kind:       model.JobAgentRepair,
+		Priority:   model.PriorityRecentFailure,
+		ScenarioID: scenarioID,
+		FeatureID:  p.FeatureID,
+		Payload:    jobPayload{ScenarioID: scenarioID, FeatureID: p.FeatureID, ShippedSHA: p.ShippedSHA, Trigger: "validation-retry"}.String(),
+	}
+	// The never-resetting sequence is in the dedup key: without it a second
+	// repair of the same version is silently dropped, and after a counter reset
+	// every future attempt collides with an old job and the loop stalls.
+	seq := o.stateInt(ctx, fixSeqKey(scenarioID)) + 1
+	_ = o.st.SetState(ctx, fixSeqKey(scenarioID), strconv.Itoa(seq))
+	if _, created, err := o.st.EnqueueJob(ctx, j, fmt.Sprintf("fix:%s:%d", scenarioID, seq)); err != nil || !created {
+		return used, limit, false
+	}
+	o.logger.Printf("scenario %s: validation failed (%s); agent fix attempt %d/%d", scenarioID, detail, next, limit)
+	return next, limit, true
+}
+
+// clearFixAttempts resets the counter once a scenario validates, so a scenario
+// that drifts again months later gets a fresh budget of attempts.
+func (o *Orchestrator) clearFixAttempts(ctx context.Context, scenarioID string) {
+	_ = o.st.SetState(ctx, fixAttemptsKey(scenarioID), "")
 }
 
 // fillProvenance completes missing feature/sha metadata (never the oracle source).

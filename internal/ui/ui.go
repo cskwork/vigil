@@ -98,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/script", s.script)
 	mux.HandleFunc("/api/overview", s.overview)
 	mux.HandleFunc("/api/schedule/window", s.scheduleWindow)
+	mux.HandleFunc("/api/supervisor", s.supervisor)
 	mux.HandleFunc("/api/run/steps", s.runSteps)
 	mux.HandleFunc("/api/agent/latest", s.agentLatest)
 	// Evidence is already secret-redacted by the runner/agent adapter; serve it read-only.
@@ -137,6 +138,7 @@ type overview struct {
 	Features  []featureView      `json:"features"`
 	Agent     *agentView         `json:"agent"`
 	Window    *windowView        `json:"window"`
+	Super     *supervisorView    `json:"supervisor"`
 }
 
 // windowView is the active-hours state the dashboard renders and edits.
@@ -227,6 +229,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 		o.Budget[k+"_minutes"] = float64(ms) / 60000
 	}
 	o.Window = s.windowState(ctx)
+	o.Super = s.supervisorState(ctx)
 	agentTasks, _ := s.st.BudgetUsed(ctx, p, "agent", time.Hour)
 	o.Budget["agent_tasks"] = float64(agentTasks)
 	o.Budget["agent_budget"] = float64(s.cfg.Budget.AgentTasksPerHour)
