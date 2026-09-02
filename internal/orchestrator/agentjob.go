@@ -426,7 +426,7 @@ func (o *Orchestrator) retryFix(ctx context.Context, scenarioID string, job *mod
 		Priority:   model.PriorityRecentFailure,
 		ScenarioID: scenarioID,
 		FeatureID:  p.FeatureID,
-		Payload:    jobPayload{ScenarioID: scenarioID, FeatureID: p.FeatureID, ShippedSHA: p.ShippedSHA, Trigger: "validation-retry"}.String(),
+		Payload:    jobPayload{ScenarioID: scenarioID, FeatureID: p.FeatureID, ShippedSHA: p.ShippedSHA, RunID: p.RunID, Trigger: "validation-retry"}.String(),
 	}
 	// The never-resetting sequence is in the dedup key: without it a second
 	// repair of the same version is silently dropped, and after a counter reset

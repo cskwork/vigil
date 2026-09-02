@@ -303,7 +303,15 @@ func (o *Orchestrator) afterChromiumConfirm(ctx context.Context, job *model.Job,
 		if _, err := o.st.RecordScenarioOutcome(ctx, o.cfg.Project.ID, sc.ID, run.Outcome, at); err != nil {
 			return err
 		}
-		o.logger.Printf("scenario %s: chromium confirm inconclusive (%s) → NEEDS_REVIEW", sc.ID, run.Outcome)
+		// Inconclusive on both browsers usually means the script is wrong, not
+		// that a person is needed - the same bounded self-repair budget applies
+		// here as after a failed validation (policy.agent_fix_attempts).
+		detail := fmt.Sprintf("chromium confirm inconclusive (%s)", run.Outcome)
+		if n, limit, retried := o.retryFix(ctx, sc.ID, job, jobPayload{FeatureID: run.FeatureID, ShippedSHA: run.ShippedSHA, RunID: run.ID}, detail); retried {
+			o.logger.Printf("scenario %s: %s; agent fix attempt %d/%d instead of review", sc.ID, detail, n, limit)
+			return o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, sc.ID, o.now().Add(o.cfg.Schedule.FailureBackoff.Duration))
+		}
+		o.logger.Printf("scenario %s: %s → NEEDS_REVIEW", sc.ID, detail)
 		return o.st.SetScenarioState(ctx, o.cfg.Project.ID, sc.ID, model.StateNeedsReview)
 	}
 }
