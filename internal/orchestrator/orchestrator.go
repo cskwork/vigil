@@ -48,6 +48,10 @@ type Orchestrator struct {
 	now    func() time.Time
 }
 
+// ErrAgentJobRequeued is a successful handoff back to the queue, not a failed
+// execution. The scheduler must retain READY instead of completing the job.
+var ErrAgentJobRequeued = errors.New("agent job requeued")
+
 func New(cfg *config.Config, st *store.Store, run *runner.Runner, ag agent.Adapter, ev *evidence.Store) *Orchestrator {
 	o := &Orchestrator{cfg: cfg, st: st, agent: ag, logger: log.New(os.Stderr, "[orchestrator] ", log.LstdFlags), now: func() time.Time { return time.Now().UTC() }}
 	if run != nil {

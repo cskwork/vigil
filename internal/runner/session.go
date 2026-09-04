@@ -200,11 +200,24 @@ func (s *session) finish() {
 	if s.layoutProbed {
 		res.Capabilities["layout"] = s.layout
 	}
-	if s.spec.Browser == model.BrowserLightpanda {
-		// Measured 2026-09-01 (nightly 9063): no Runtime.exceptionThrown for uncaught errors.
-		res.Capabilities["exception_events"] = false
-	}
+	s.recordBrowserCapabilities()
 	res.FinishedAt = time.Now()
+}
+
+// recordBrowserCapabilities notes limits of the engine itself, independent of what this
+// run happened to exercise. Only measured limits belong here: absence of an event during
+// one run is not evidence that the browser cannot produce it.
+func (s *session) recordBrowserCapabilities() {
+	if s.spec.Browser != model.BrowserLightpanda {
+		return
+	}
+	// Measured 2026-09-01 (nightly 9063): no Runtime.exceptionThrown for uncaught errors.
+	s.res.Capabilities["exception_events"] = false
+	// Lightpanda has no paint pipeline: it fetches neither stylesheets nor web fonts, so
+	// Page.captureScreenshot returns an unstyled text rendering of the DOM whose glyphs
+	// fall back to tofu wherever the default font has no coverage. The capture still
+	// evidences what the DOM said; it does not evidence what a user would see.
+	s.res.Capabilities["screenshot_painted"] = false
 }
 
 // globalAsserts evaluates assert.no_uncaught_console_error / no_http_5xx / no_http_4xx_on.

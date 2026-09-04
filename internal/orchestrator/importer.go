@@ -117,11 +117,40 @@ func (o *Orchestrator) ImportScenarioFiles(ctx context.Context) (int, error) {
 			_ = o.st.SetState(ctx, hashKey, textHash(text))
 			meta := o.scenarioModel(sc, existing.ID, existing.State, fp, existing.Origin)
 			_ = o.st.UpdateScenarioMeta(ctx, o.cfg.Project.ID, existing.ID, meta.Title, meta.Class, meta.Mutation, meta.Locks)
-			o.logger.Printf("import %s: %s v%d → v%d (state %s kept)", rel(o.cfg.BaseDir, path), existing.ID, existing.CurrentVersion, next, existing.State)
+			// A pin decides the engine outright (scheduler.pickBrowser), so accepting one for an
+			// engine the scenario has never passed on would turn a green check red with nobody
+			// asked. Keep the version, but make it earn ACTIVE again on the engine it now claims.
+			state := existing.State
+			pinned := pinnedBrowser(sc)
+			if pinned != "" && existing.State == model.StateActive {
+				if ok, err := o.st.HasPassOnBrowser(ctx, o.cfg.Project.ID, existing.ID, pinned); err == nil && !ok {
+					if err := o.st.ResetSoak(ctx, o.cfg.Project.ID, existing.ID); err == nil {
+						state = model.StateSoak
+					}
+				}
+			}
+			if state != existing.State {
+				o.logger.Printf("import %s: %s v%d → v%d (pins %s with no passing run there; %s → %s, needs %d clean pass(es))",
+					rel(o.cfg.BaseDir, path), existing.ID, existing.CurrentVersion, next, pinned, existing.State, state, o.cfg.Policy.SoakPasses)
+			} else {
+				o.logger.Printf("import %s: %s v%d → v%d (state %s kept)", rel(o.cfg.BaseDir, path), existing.ID, existing.CurrentVersion, next, existing.State)
+			}
 			count++
 		}
 	}
 	return count, nil
+}
+
+// pinnedBrowser reports the engine a scenario forces, or "" when it takes the default.
+// Mirrors the precedence in scheduler.pickBrowser.
+func pinnedBrowser(sc *dsl.Scenario) model.Browser {
+	if sc.Browser.RequiresChromium {
+		return model.BrowserChromium
+	}
+	if sc.Browser.Primary != "" {
+		return model.Browser(sc.Browser.Primary)
+	}
+	return ""
 }
 
 // yamlFiles lists *.yaml / *.yml under dir recursively (sorted); a missing dir is empty.

@@ -8,10 +8,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"vigil/internal/agent"
 	"vigil/internal/config"
 	"vigil/internal/evidence"
 	"vigil/internal/model"
@@ -27,6 +29,33 @@ type fakeRunner struct {
 	calls int
 	fn    func(call int, spec runner.Spec) (*runner.Result, error)
 }
+
+type preemptIntegrationAgent struct {
+	oldStarted chan struct{}
+	userDone   chan struct{}
+	onceOld    sync.Once
+	onceUser   sync.Once
+}
+
+func (a *preemptIntegrationAgent) Run(ctx context.Context, req agent.Request, _ string) (*agent.Result, error) {
+	switch req.FeatureID {
+	case "old":
+		a.onceOld.Do(func() { close(a.oldStarted) })
+		<-ctx.Done()
+		return nil, ctx.Err()
+	case "user":
+		a.onceUser.Do(func() { close(a.userDone) })
+	}
+	return &agent.Result{Decision: agent.DecisionNoNewCoverage}, nil
+}
+
+func (a *preemptIntegrationAgent) Plan(context.Context, string, string) (*agent.Plan, error) {
+	return nil, errors.New("not used")
+}
+func (a *preemptIntegrationAgent) Reparse(string) (*agent.Result, error) {
+	return nil, errors.New("not used")
+}
+func (a *preemptIntegrationAgent) Doctor(context.Context) error { return nil }
 
 func (f *fakeRunner) Run(ctx context.Context, spec runner.Spec) (*runner.Result, error) {
 	f.mu.Lock()
@@ -45,6 +74,7 @@ type fakeOrch struct {
 	afterErr         error
 	supervised       int
 	supervisorResult *orchestrator.SupervisorResult
+	agentFn          func(context.Context, *model.Job) error
 }
 
 func (o *fakeOrch) SupervisorTick(context.Context) (*orchestrator.SupervisorResult, error) {
@@ -80,8 +110,12 @@ func (o *fakeOrch) AfterRun(ctx context.Context, job *model.Job, run *model.Run,
 }
 func (o *fakeOrch) HandleAgentJob(ctx context.Context, job *model.Job) error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	o.agent = append(o.agent, job.ID)
+	fn := o.agentFn
+	o.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, job)
+	}
 	return nil
 }
 
@@ -558,8 +592,16 @@ func TestAgentWorkerRespectsBudgetThenRuns(t *testing.T) {
 		cancel()
 		t.Fatal("agent job must wait while the agent budget is exhausted")
 	}
-	// widen the budget: the job is picked up
+	// Stop the first loop before changing its config. A restarted loop must pick
+	// up the READY job after the operator widens the budget.
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	h.cfg.Budget.AgentTasksPerHour = 5
+	loopCtx, cancel = context.WithCancel(ctx)
+	done = make(chan error, 1)
+	go func() { done <- h.s.Loop(loopCtx) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		h.orch.mu.Lock()
@@ -580,6 +622,287 @@ func TestAgentWorkerRespectsBudgetThenRuns(t *testing.T) {
 	}
 	if used, _ := h.st.BudgetUsed(ctx, "p", "agent", time.Hour); used != 2 {
 		t.Fatalf("agent budget not recorded: %d", used)
+	}
+}
+
+func TestPrioritizeAgentJobPreemptsActiveAndBypassesBudget(t *testing.T) {
+	h := newHarness(t, &fakeRunner{}, nil, nil)
+	h.cfg.Budget.AgentTasksPerHour = 1
+	h.s.AgentAvailable = true
+	ctx := context.Background()
+
+	oldID, _, err := h.st.EnqueueJob(ctx, &model.Job{
+		ProjectID: "p", Kind: model.JobAgentRepair, Priority: model.PriorityRecentFailure, FeatureID: "old",
+	}, "agent:old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStarted := make(chan struct{})
+	userDone := make(chan struct{})
+	var oldOnce, userOnce sync.Once
+	h.orch.agentFn = func(runCtx context.Context, job *model.Job) error {
+		switch job.FeatureID {
+		case "old":
+			oldOnce.Do(func() { close(oldStarted) })
+			<-runCtx.Done()
+			return runCtx.Err()
+		case "user":
+			userOnce.Do(func() { close(userDone) })
+		}
+		return nil
+	}
+
+	// Let the existing job start before exhausting the hourly budget. The
+	// running task is allowed to finish even if the budget changes underneath it.
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- h.s.Loop(loopCtx) }()
+	select {
+	case <-oldStarted:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("old agent job did not start")
+	}
+	if err := h.st.RecordBudget(ctx, "p", "agent", 1); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+
+	userID, _, err := h.st.EnqueueJob(ctx, &model.Job{
+		ProjectID: "p", Kind: model.JobAgentDiscover, Priority: model.PriorityUserRequest, FeatureID: "user",
+	}, "agent:user")
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if err := h.s.PrioritizeAgentJob(ctx, userID); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	select {
+	case <-userDone:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("prioritized user job did not bypass the exhausted budget")
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := h.st.ListJobs(ctx, "p", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[int64]*model.Job{}
+	for _, job := range jobs {
+		byID[job.ID] = job
+	}
+	if got := byID[oldID]; got == nil || got.State != model.JobReady || got.Attempt != 0 || got.LeaseOwner != "" {
+		t.Fatalf("displaced job = %+v, want READY with its attempt restored", got)
+	}
+	if got := byID[userID]; got == nil || got.State != model.JobDone || got.Attempt != 1 {
+		t.Fatalf("user job = %+v, want DONE after one attempt", got)
+	}
+	if used, _ := h.st.BudgetUsed(ctx, "p", "agent", time.Hour); used != 2 {
+		t.Fatalf("agent budget = %d, want initial 1 + prioritized user job 1", used)
+	}
+	var oldAttempts int
+	if err := h.st.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM job_attempts WHERE job_id=?`, oldID).Scan(&oldAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if oldAttempts != 0 {
+		t.Fatalf("displaced job retained %d consumed attempt record(s)", oldAttempts)
+	}
+	if len(h.orch.agent) != 2 || h.orch.agent[0] != oldID || h.orch.agent[1] != userID {
+		t.Fatalf("agent execution order = %v, want [%d %d]", h.orch.agent, oldID, userID)
+	}
+}
+
+func TestPreemptionWithRealOrchestratorDoesNotChargeCancelledAgent(t *testing.T) {
+	h := newHarness(t, &fakeRunner{}, nil, nil)
+	h.cfg.Budget.AgentTasksPerHour = 1
+	ag := &preemptIntegrationAgent{oldStarted: make(chan struct{}), userDone: make(chan struct{})}
+	realOrch := orchestrator.New(h.cfg, h.st, nil, ag, h.s.Evidence())
+	s := NewWith(h.cfg, h.st, realOrch, nil, nil, nil)
+	s.AgentAvailable = true
+	s.Log = log.New(io.Discard, "", 0)
+	ctx := context.Background()
+
+	oldID, _, _ := h.st.EnqueueJob(ctx, &model.Job{ProjectID: "p", Kind: model.JobAgentDiscover, Priority: 100, FeatureID: "old"}, "old")
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- s.Loop(loopCtx) }()
+	select {
+	case <-ag.oldStarted:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("old real-orchestrator job did not start")
+	}
+	if err := h.st.RecordBudget(ctx, "p", "agent", 1); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	userID, _, _ := h.st.EnqueueJob(ctx, &model.Job{ProjectID: "p", Kind: model.JobAgentDiscover, Priority: model.PriorityUserRequest, FeatureID: "user"}, "user")
+	if err := s.PrioritizeAgentJob(ctx, userID); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	select {
+	case <-ag.userDone:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("user real-orchestrator job did not run")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := h.st.BudgetUsed(ctx, "p", "agent", time.Hour); used != 2 {
+		t.Fatalf("budget = %d, want preexisting 1 + user 1; cancelled old job must cost 0", used)
+	}
+	jobs, _ := h.st.ListJobs(ctx, "p", nil, 10)
+	byID := map[int64]*model.Job{}
+	for _, job := range jobs {
+		byID[job.ID] = job
+	}
+	if byID[oldID] == nil || byID[oldID].State != model.JobReady || byID[oldID].Attempt != 0 {
+		t.Fatalf("cancelled old job = %+v", byID[oldID])
+	}
+}
+
+func TestPrioritizeAgentJobRejectsDeterministicJob(t *testing.T) {
+	h := newHarness(t, &fakeRunner{}, nil, nil)
+	ctx := context.Background()
+	id, _, err := h.st.EnqueueJob(ctx, &model.Job{
+		ProjectID: "p", Kind: model.JobRunScenario, Priority: 1000, ScenarioID: "scenario",
+	}, "run:scenario")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.PrioritizeAgentJob(ctx, id); err == nil {
+		t.Fatal("deterministic job must not be accepted for agent preemption")
+	}
+	jobs, err := h.st.ListJobs(ctx, "p", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].State != model.JobReady || jobs[0].Attempt != 0 {
+		t.Fatalf("deterministic job changed: %+v", jobs)
+	}
+}
+
+func TestPrioritizeLeasedUserJobStillCancelsDifferentLocalAgent(t *testing.T) {
+	h := newHarness(t, &fakeRunner{}, nil, nil)
+	ctx := context.Background()
+	userID, _, _ := h.st.EnqueueJob(ctx, &model.Job{ProjectID: "p", Kind: model.JobAgentDiscover, Priority: model.PriorityUserRequest, FeatureID: "user"}, "user")
+	if _, err := h.st.ClaimJob(ctx, "p", "other-loop", time.Minute, model.JobAgentDiscover); err != nil {
+		t.Fatal(err)
+	}
+	activeCtx, cancel := context.WithCancelCause(ctx)
+	h.s.agentMu.Lock()
+	h.s.activeAgent = &activeAgentJob{jobID: userID + 100, cancel: cancel}
+	h.s.agentMu.Unlock()
+
+	if err := h.s.PrioritizeAgentJob(ctx, userID); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(context.Cause(activeCtx), errAgentPreempted) {
+		t.Fatalf("active agent cause = %v", context.Cause(activeCtx))
+	}
+}
+
+func TestAgentWorkerPreservesRequeuedJobState(t *testing.T) {
+	h := newHarness(t, &fakeRunner{}, nil, nil)
+	h.s.AgentAvailable = true
+	ctx := context.Background()
+	id, _, _ := h.st.EnqueueJob(ctx, &model.Job{ProjectID: "p", Kind: model.JobAgentDiscover, Priority: 90, FeatureID: "retry", MaxAttempts: 2}, "retry")
+	h.orch.agentFn = func(_ context.Context, job *model.Job) error {
+		_, err := h.st.RequeueJob(context.Background(), job.ID, time.Now().Add(time.Minute), "model unavailable")
+		if err != nil {
+			return err
+		}
+		return orchestrator.ErrAgentJobRequeued
+	}
+
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- h.s.Loop(loopCtx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		jobs, _ := h.st.ListJobs(ctx, "p", []model.JobState{model.JobReady}, 10)
+		if len(jobs) == 1 && jobs[0].ID == id && strings.Contains(jobs[0].LastError, "model unavailable") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	jobs, _ := h.st.ListJobs(ctx, "p", []model.JobState{model.JobReady}, 10)
+	if len(jobs) != 1 || jobs[0].ID != id {
+		t.Fatalf("requeued job was completed: %+v", jobs)
+	}
+}
+
+func TestLatePreemptionDoesNotRestoreCompletedAgentJob(t *testing.T) {
+	h := newHarness(t, &fakeRunner{}, nil, nil)
+	ctx := context.Background()
+	id, _, _ := h.st.EnqueueJob(ctx, &model.Job{ProjectID: "p", Kind: model.JobAgentDiscover, Priority: 90, FeatureID: "completed"}, "completed")
+	job, err := h.st.ClaimJob(ctx, "p", "agent-1", time.Minute, model.JobAgentDiscover)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.orch.agentFn = func(context.Context, *model.Job) error {
+		h.s.agentMu.Lock()
+		h.s.activeAgent.cancel(errAgentPreempted)
+		h.s.agentMu.Unlock()
+		return nil
+	}
+
+	h.s.executeAgent(ctx, "agent-1", job)
+	jobs, _ := h.st.ListJobs(ctx, "p", nil, 10)
+	if len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != model.JobDone || jobs[0].Attempt != 1 {
+		t.Fatalf("successfully completed job was restored: %+v", jobs)
+	}
+}
+
+func TestPersistedUserPriorityBypassesBudgetOnceAfterRestart(t *testing.T) {
+	h := newHarness(t, &fakeRunner{}, nil, nil)
+	h.cfg.Budget.AgentTasksPerHour = 1
+	h.s.AgentAvailable = true
+	ctx := context.Background()
+	if err := h.st.RecordBudget(ctx, "p", "agent", 1); err != nil {
+		t.Fatal(err)
+	}
+	id, _, _ := h.st.EnqueueJob(ctx, &model.Job{ProjectID: "p", Kind: model.JobAgentDiscover, Priority: model.PriorityUserRequest, FeatureID: "user"}, "user-restart")
+	doneUser := make(chan struct{})
+	var once sync.Once
+	h.orch.agentFn = func(context.Context, *model.Job) error {
+		once.Do(func() { close(doneUser) })
+		return nil
+	}
+
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- h.s.Loop(loopCtx) }()
+	select {
+	case <-doneUser:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("persisted user request did not bypass budget after restart")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	jobs, _ := h.st.ListJobs(ctx, "p", nil, 10)
+	if len(jobs) != 1 || jobs[0].ID != id || jobs[0].State != model.JobDone || jobs[0].Priority != model.PriorityNewDirectCoverage {
+		t.Fatalf("user job did not consume one-shot priority: %+v", jobs)
+	}
+	if used, _ := h.st.BudgetUsed(ctx, "p", "agent", time.Hour); used != 2 {
+		t.Fatalf("budget = %d, want existing 1 + user request 1", used)
 	}
 }
 

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"vigil/internal/agent"
 	"vigil/internal/config"
+	"vigil/internal/dsl"
 	"vigil/internal/model"
 	"vigil/internal/runner"
 	"vigil/internal/store"
@@ -517,8 +519,8 @@ func TestDuplicateCandidatesRejected(t *testing.T) {
 	if ok, _ := o.getJSONState(ctx, stateGatePrefix+"remedy-order-agent", &g); !ok || g.State != model.StateDuplicate {
 		t.Fatalf("fingerprint gate = %+v", g)
 	}
-	if used, _ := st.BudgetUsed(ctx, "p", "agent", time.Hour); used != 1 {
-		t.Fatalf("budget recorded = %d", used)
+	if used, _ := st.BudgetUsed(ctx, "p", "agent", time.Hour); used != 0 {
+		t.Fatalf("orchestrator must leave budget charging to scheduler, got %d", used)
 	}
 	if len(fa.reqs) != 1 || fa.reqs[0].Task != agent.TaskVerifyChange || len(fa.reqs[0].KnownScripts) != 1 || fa.reqs[0].KnownScripts[0] != "visible-remedy-order/v1" {
 		t.Fatalf("request = %+v", fa.reqs)
@@ -620,8 +622,8 @@ func TestModelUnavailableRequeues(t *testing.T) {
 	feature(t, st, "training-entry-page", "def456", nil, nil)
 	fa.res = &agent.Result{ModelUnavailable: true, Reason: "429 rate limit"}
 	job := agentJob(t, st, model.JobAgentDiscover, "training-entry-page", "def456", "")
-	if err := o.HandleAgentJob(ctx, job); err != nil {
-		t.Fatalf("model unavailable must not error: %v", err)
+	if err := o.HandleAgentJob(ctx, job); !errors.Is(err, ErrAgentJobRequeued) {
+		t.Fatalf("model unavailable = %v, want ErrAgentJobRequeued", err)
 	}
 	jobs, _ := st.ListJobs(ctx, "p", []model.JobState{model.JobReady}, 10)
 	if len(jobs) != 1 || jobs[0].ID != job.ID || !strings.Contains(jobs[0].LastError, "model unavailable") || time.Until(jobs[0].ScheduledAt) < 30*time.Second {
@@ -629,6 +631,9 @@ func TestModelUnavailableRequeues(t *testing.T) {
 	}
 	if n, _ := st.CountJobs(ctx, "p", model.JobDone); n != 0 {
 		t.Fatalf("job wrongly completed")
+	}
+	if used, _ := st.BudgetUsed(ctx, "p", "agent", time.Hour); used != 0 {
+		t.Fatalf("orchestrator charged agent budget directly: %d", used)
 	}
 }
 
@@ -724,5 +729,91 @@ func TestReimportUnchangedFileKeepsSystemVersion(t *testing.T) {
 	after, _ := st.GetScenario(ctx, cfg.Project.ID, "re-import-a")
 	if after.CurrentVersion != v2.Version {
 		t.Fatalf("system version overwritten: current=%d want %d", after.CurrentVersion, v2.Version)
+	}
+}
+
+// A pin decides the engine outright (scheduler.pickBrowser), so importing one for an engine
+// the scenario has never passed on must not leave it ACTIVE — that is how a green check goes
+// red with nobody asked.
+func TestImportPinToUnprovenBrowserResoaks(t *testing.T) {
+	o, st, _, _, cfg := newTest(t)
+	ctx := context.Background()
+	seed(t, o, cfg, seedScenario)
+	_ = st.SetScenarioState(ctx, "p", "visible-remedy-order", model.StateActive)
+
+	pinned := strings.Replace(seedScenario, "version: 1", "version: 2", 1)
+	pinned = strings.Replace(pinned, "steps:\n", "browser:\n  requires_chromium: true\nsteps:\n", 1)
+	if err := os.WriteFile(filepath.Join(cfg.BaseDir, cfg.Paths.Scenarios, "seed.yaml"), []byte(pinned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := o.ImportScenarioFiles(ctx); err != nil || n != 1 {
+		t.Fatalf("import: n=%d err=%v", n, err)
+	}
+	sc, v, err := st.GetCurrentScenarioVersion(ctx, "p", "visible-remedy-order")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Version != 2 {
+		t.Fatalf("version = %d, want 2 (the pin must still be recorded)", v.Version)
+	}
+	if sc.State != model.StateSoak {
+		t.Fatalf("state = %s, want SOAK", sc.State)
+	}
+	if sc.SoakPasses != 0 {
+		t.Fatalf("soak_passes = %d, want 0 (it must re-earn ACTIVE on the engine it now claims)", sc.SoakPasses)
+	}
+}
+
+// The guard is about evidence, not about the pin itself: a scenario that has already passed
+// on the engine it pins keeps its state.
+func TestImportPinToProvenBrowserKeepsActive(t *testing.T) {
+	o, st, _, _, cfg := newTest(t)
+	ctx := context.Background()
+	seed(t, o, cfg, seedScenario)
+	_ = st.SetScenarioState(ctx, "p", "visible-remedy-order", model.StateActive)
+	if _, err := st.InsertRun(ctx, &model.Run{
+		ProjectID: "p", ScenarioID: "visible-remedy-order", Browser: model.BrowserChromium,
+		Outcome: model.OutcomePass, StartedAt: time.Now(), FinishedAt: time.Now(), DurationMs: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pinned := strings.Replace(seedScenario, "version: 1", "version: 2", 1)
+	pinned = strings.Replace(pinned, "steps:\n", "browser:\n  requires_chromium: true\nsteps:\n", 1)
+	if err := os.WriteFile(filepath.Join(cfg.BaseDir, cfg.Paths.Scenarios, "seed.yaml"), []byte(pinned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := o.ImportScenarioFiles(ctx); err != nil || n != 1 {
+		t.Fatalf("import: n=%d err=%v", n, err)
+	}
+	sc, _, err := st.GetCurrentScenarioVersion(ctx, "p", "visible-remedy-order")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.State != model.StateActive {
+		t.Fatalf("state = %s, want ACTIVE (chromium already has a passing run)", sc.State)
+	}
+}
+
+func TestPinnedBrowserPrecedence(t *testing.T) {
+	cases := []struct {
+		name             string
+		requiresChromium bool
+		primary          string
+		want             model.Browser
+	}{
+		{"unpinned takes the default", false, "", ""},
+		{"requires_chromium wins", true, "lightpanda", model.BrowserChromium},
+		{"primary alone pins", false, "lightpanda", model.BrowserLightpanda},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var sc dsl.Scenario
+			sc.Browser.RequiresChromium = tc.requiresChromium
+			sc.Browser.Primary = tc.primary
+			if got := pinnedBrowser(&sc); got != tc.want {
+				t.Fatalf("pinnedBrowser = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

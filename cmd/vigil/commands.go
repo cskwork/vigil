@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"gopkg.in/yaml.v3"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +16,8 @@ import (
 	"vigil/internal/dsl"
 	"vigil/internal/ingest"
 	"vigil/internal/model"
+	"vigil/internal/orchestrator"
+	"vigil/internal/scheduler"
 	"vigil/internal/ui"
 )
 
@@ -196,48 +196,33 @@ func (a *app) cmdRequest(ctx context.Context, args []string) error {
 	if err := yaml.Unmarshal(raw, &mr); err != nil {
 		return fmt.Errorf("%s: %w", positional[0], err)
 	}
-	if mr.FeatureID == "" || mr.Instructions == "" {
+	if strings.TrimSpace(mr.FeatureID) == "" {
 		return errors.New("request needs feature_id and instructions")
 	}
-	if mr.Mutation == "" {
-		mr.Mutation = "read-only"
-	}
-	if mr.Mutation == "destructive" && !a.cfg.Policy.AllowDestructive {
-		return errors.New("destructive requests need policy.allow_destructive: true")
-	}
-	if mr.EntryURL != "" {
-		u, err := url.Parse(mr.EntryURL)
-		if err != nil || !a.cfg.HostAllowed(u.Host) {
-			return fmt.Errorf("entry_url host is not in target.allowed_hosts: %s", mr.EntryURL)
-		}
-	}
-	req := &agent.Request{Summary: mr.Summary, EntryURL: mr.EntryURL, Routes: mr.Routes, Accounts: mr.Accounts, Instructions: mr.Instructions,
-		Mutation: mr.Mutation, Locks: mr.Locks, MaxToolCalls: mr.MaxToolCalls, TimeoutMinutes: mr.TimeoutMinutes, MaxContinuations: mr.MaxContinuations}
-	sha := "manual-" + time.Now().UTC().Format("20060102T150405Z")
-	if *dry {
-		b, _ := yaml.Marshal(req)
-		a.printf("feature %s sha %s\n%s", mr.FeatureID, sha, b)
-		return nil
-	}
-	ev := model.FeatureEvent{FeatureID: mr.FeatureID, Status: "requested", ShippedSHA: sha, ShippedAt: time.Now().UTC(), Routes: mr.Routes, Summary: mr.Summary, Source: "manual"}
-	if _, err := a.st.UpsertFeature(ctx, a.cfg.Project.ID, ev); err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	_ = a.st.SetFeatureReadiness(ctx, a.cfg.Project.ID, mr.FeatureID, model.ReadinessReady, &now)
-	_ = a.st.MarkFeatureHandled(ctx, a.cfg.Project.ID, mr.FeatureID, sha)
-	payload, _ := json.Marshal(map[string]any{"feature_id": mr.FeatureID, "shipped_sha": sha, "request": req})
-	id, created, err := a.st.EnqueueJob(ctx, &model.Job{
-		ProjectID: a.cfg.Project.ID, Kind: model.JobAgentDiscover, Priority: model.PriorityNewDirectCoverage,
-		FeatureID: mr.FeatureID, MaxAttempts: 1, Payload: string(payload),
-	}, "request:"+mr.FeatureID+":"+sha)
+	orch := a.buildOrchestrator(nil, nil)
+	in, err := orch.NormalizeManualRequest(orchestrator.ManualRequest{
+		FeatureID: mr.FeatureID, Summary: mr.Summary, EntryURL: mr.EntryURL, Routes: mr.Routes,
+		Accounts: mr.Accounts, Instructions: mr.Instructions, Mutation: mr.Mutation, Locks: mr.Locks,
+		MaxToolCalls: mr.MaxToolCalls, TimeoutMinutes: mr.TimeoutMinutes, MaxContinuations: mr.MaxContinuations,
+	})
 	if err != nil {
 		return err
 	}
-	if !created {
-		a.printf("reusing queued request job %d\n", id)
+	if *dry {
+		req := &agent.Request{Summary: in.Summary, EntryURL: in.EntryURL, Routes: in.Routes, Accounts: in.Accounts, Instructions: in.Instructions,
+			Mutation: in.Mutation, Locks: in.Locks, MaxToolCalls: in.MaxToolCalls, TimeoutMinutes: in.TimeoutMinutes, MaxContinuations: in.MaxContinuations}
+		b, _ := yaml.Marshal(req)
+		a.printf("feature %s\n%s", in.FeatureID, b)
+		return nil
 	}
-	a.printf("request %s → job %d (mutation=%s accounts=%v max_tool_calls=%d)\n", mr.FeatureID, id, mr.Mutation, mr.Accounts, mr.MaxToolCalls)
+	result, err := orch.RegisterManualRequest(ctx, in)
+	if err != nil {
+		return err
+	}
+	if !result.Created {
+		a.printf("reusing queued request job %d\n", result.JobID)
+	}
+	a.printf("request %s → job %d (mutation=%s accounts=%v max_tool_calls=%d)\n", result.FeatureID, result.JobID, in.Mutation, in.Accounts, in.MaxToolCalls)
 	if *queue {
 		a.printf("queued; a running `vigil loop` will execute it\n")
 		return nil
@@ -247,12 +232,12 @@ func (a *app) cmdRequest(ctx context.Context, args []string) error {
 	if ag == nil {
 		return errors.New("request needs the Browser Agent; see `vigil doctor`")
 	}
-	orch := a.buildOrchestrator(run, ag)
+	orch = a.buildOrchestrator(run, ag)
 	s := a.buildScheduler(orch, run, false, true)
-	if err := s.RunJobNow(ctx, id); err != nil {
+	if err := s.RunJobNow(ctx, result.JobID); err != nil {
 		return err
 	}
-	return a.printJobResult(ctx, id)
+	return a.printJobResult(ctx, result.JobID)
 }
 
 // cmdPrune applies the retention policy immediately and prints what it did.
@@ -582,6 +567,22 @@ func (a *app) impactedScenarios(ctx context.Context, featureID string) ([]string
 
 // ---- loop ---------------------------------------------------------------------------
 
+type loopRequestSubmitter struct {
+	orch  *orchestrator.Orchestrator
+	sched *scheduler.Scheduler
+}
+
+func (s loopRequestSubmitter) SubmitUserRequest(ctx context.Context, situation string) (string, int64, error) {
+	featureID, jobID, err := s.orch.SubmitUserRequest(ctx, situation)
+	if err != nil {
+		return "", 0, err
+	}
+	if err := s.sched.PrioritizeAgentJob(ctx, jobID); err != nil {
+		return featureID, jobID, fmt.Errorf("request queued but could not preempt current agent work: %w", err)
+	}
+	return featureID, jobID, nil
+}
+
 func (a *app) cmdLoop(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("loop", flag.ContinueOnError)
 	uiAddr := fs.String("ui", "", "serve the read-only live view on this address (e.g. 127.0.0.1:8787)")
@@ -591,15 +592,6 @@ func (a *app) cmdLoop(ctx context.Context, args []string) error {
 	if err := a.useLoopLogger(); err != nil {
 		return err
 	}
-	if *uiAddr != "" {
-		srv := ui.New(a.cfg, a.st, a.cfg.Abs(a.cfg.Evidence.Dir))
-		go func() {
-			if err := srv.ListenAndServe(ctx, *uiAddr); err != nil {
-				a.log.Printf("ui: %v", err)
-			}
-		}()
-		a.log.Printf("ui: live view at http://%s/", *uiAddr)
-	}
 	if err := a.st.UpsertProject(ctx, a.cfg.Project.ID, a.cfg.Target.BaseURL); err != nil {
 		return err
 	}
@@ -608,6 +600,18 @@ func (a *app) cmdLoop(ctx context.Context, args []string) error {
 	ag := a.buildAgent()
 	orch := a.buildOrchestrator(run, ag)
 	s := a.buildScheduler(orch, run, true, ag != nil)
+	if *uiAddr != "" {
+		srv := ui.New(a.cfg, a.st, a.cfg.Abs(a.cfg.Evidence.Dir))
+		if ag != nil {
+			srv.SetRequestSubmitter(loopRequestSubmitter{orch: orch, sched: s})
+		}
+		go func() {
+			if err := srv.ListenAndServe(ctx, *uiAddr); err != nil {
+				a.log.Printf("ui: %v", err)
+			}
+		}()
+		a.log.Printf("ui: live view at http://%s/", *uiAddr)
+	}
 	a.log.Printf("loop: config=%s state=%s log=%s", a.cfgPath, a.cfg.Abs(a.cfg.State.Path), filepath.Join(a.stateDir(), "vigil.log"))
 	a.log.Printf("loop: target=%s hosts=%v discovery=%s/%s readiness=%s primary=%s", a.cfg.Target.BaseURL, a.cfg.Target.AllowedHosts,
 		a.cfg.Discovery.Adapter, a.cfg.Discovery.Branch, a.cfg.Deployment.Readiness.Strategy, a.cfg.Browser.Primary)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
@@ -225,6 +226,40 @@ func (s *session) doGoto(ctx context.Context, ref string, sr *StepResult) *stepE
 	return nil
 }
 
+// armClickWitness installs a one-shot capture-phase listener so the next click can be
+// observed. CDP reports Input.dispatchMouseEvent as successful the moment the browser
+// accepts it, even when the coordinate lands on nothing, so "no error" is not evidence
+// that the element was clicked.
+func armClickWitness(ref string) string {
+	return `(function(){var el=` + jsRef(ref) + `; if(!el) return 'gone';
+		el.__vigilHit=false;
+		el.__vigilWitness=function(){el.__vigilHit=true};
+		el.addEventListener('click', el.__vigilWitness, true);
+		return 'ok'})()`
+}
+
+// readClickWitness reports hit|miss|gone and removes the listener. "gone" means the node
+// left the document, which is what a click that navigated or re-rendered looks like.
+func readClickWitness(ref string) string {
+	return `(function(){var el=` + jsRef(ref) + `; if(!el) return 'gone';
+		var hit=el.__vigilHit===true;
+		if(el.__vigilWitness){el.removeEventListener('click', el.__vigilWitness, true); delete el.__vigilWitness}
+		delete el.__vigilHit;
+		return hit?'hit':'miss'})()`
+}
+
+// dispatchClick fires the sequence a real pointer produces. el.click() alone emits no
+// mousedown, so handlers bound to mousedown or pointerdown never run - a common Vue idiom
+// (@mousedown.prevent on autocomplete items) that silently swallows a DOM-only click.
+func dispatchClick(ref string) string {
+	return `(function(){var el=` + jsRef(ref) + `; if(!el) return 'gone';
+		var o={bubbles:true,cancelable:true,view:window};
+		el.dispatchEvent(new MouseEvent('mousedown',o));
+		el.dispatchEvent(new MouseEvent('mouseup',o));
+		el.click();
+		return 'ok'})()`
+}
+
 func (s *session) doClick(ctx context.Context, l *dsl.Locator, sr *StepResult, ref string) *stepErr {
 	r, serr := s.resolve(ctx, l, ref, true)
 	if serr != nil {
@@ -233,17 +268,27 @@ func (s *session) doClick(ctx context.Context, l *dsl.Locator, sr *StepResult, r
 	sr.Expected = "click " + describeLocator(l)
 	var nativeErr error
 	if s.layout {
-		nativeErr = chromedp.Run(ctx, chromedp.Click(refSelector(ref), chromedp.ByQuery))
-		if nativeErr == nil {
-			sr.Actual = fmt.Sprintf("native click on <%s> %q", r.Tag, r.Text)
-			return nil
+		var armed string
+		if err := chromedp.Run(ctx, chromedp.Evaluate(armClickWitness(ref), &armed)); err == nil && armed == "ok" {
+			nativeErr = chromedp.Run(ctx, chromedp.Click(refSelector(ref), chromedp.ByQuery))
+			if nativeErr == nil {
+				var got string
+				// A read error means the execution context went away, which only a landed
+				// click does; treat it, and an absent node, as success.
+				if err := chromedp.Run(ctx, chromedp.Evaluate(readClickWitness(ref), &got)); err != nil || got != "miss" {
+					sr.Actual = fmt.Sprintf("native click on <%s> %q", r.Tag, r.Text)
+					return nil
+				}
+				s.res.Capabilities["native_click"] = false
+				s.note("step %d: %s accepted the native click but <%s> %q received no click event; re-sent it as dispatched mouse events", sr.Index, s.spec.Browser, r.Tag, r.Text)
+			}
 		}
-		if ctx.Err() != nil {
+		if nativeErr != nil && ctx.Err() != nil {
 			return s.classifyCDPErr(nativeErr, FailLocator, "click "+describeLocator(l))
 		}
 	}
 	var out string
-	err := chromedp.Run(ctx, chromedp.Evaluate(`(function(){var el=`+jsRef(ref)+`; if(!el) return 'gone'; el.click(); return 'ok'})()`, &out))
+	err := chromedp.Run(ctx, chromedp.Evaluate(dispatchClick(ref), &out))
 	if err != nil {
 		return s.classifyCDPErr(err, FailLocator, "click "+describeLocator(l))
 	}
@@ -747,6 +792,27 @@ func (s *session) doAttr(ctx context.Context, a *dsl.AttrAssert, sr *StepResult,
 // doPopup waits for a page target created by the previous action and switches
 // the run to it. Browsers that open window.open() in the same target (Lightpanda,
 // measured) cannot satisfy this step: it fails with FailPopup and a note.
+// browserContextID resolves which browser context our own tab lives in, so popup
+// discovery can ignore tabs belonging to other runs on the same browser process.
+// An empty result disables the filter rather than rejecting every candidate.
+func (s *session) browserContextID(ctx context.Context, ownTarget string) cdp.BrowserContextID {
+	if ownTarget == "" {
+		return ""
+	}
+	tctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	infos, err := chromedp.Targets(tctx)
+	if err != nil {
+		return ""
+	}
+	for _, info := range infos {
+		if string(info.TargetID) == ownTarget {
+			return info.BrowserContextID
+		}
+	}
+	return ""
+}
+
 func (s *session) doPopup(ctx context.Context, a *dsl.PopupArgs, sr *StepResult) *stepErr {
 	sr.Expected = "new page target"
 	if a.URLContains != "" {
@@ -756,8 +822,15 @@ func (s *session) doPopup(ctx context.Context, a *dsl.PopupArgs, sr *StepResult)
 	if c := chromedp.FromContext(s.pageCtx); c != nil && c.Target != nil {
 		current = string(c.Target.TargetID)
 	}
+	// Runs share one browser process and each gets its own browser context (openTab uses
+	// WithNewBrowserContext). Target.getTargets returns every context's pages, so without
+	// this filter a concurrent run's tab can be adopted as "the popup".
+	ownCtx := s.browserContextID(ctx, current)
 	isNew := func(info *target.Info) bool {
-		return info != nil && info.Type == "page" && string(info.TargetID) != current && !s.knownTargets[info.TargetID]
+		if info == nil || info.Type != "page" || string(info.TargetID) == current || s.knownTargets[info.TargetID] {
+			return false
+		}
+		return ownCtx == "" || info.BrowserContextID == ownCtx
 	}
 	var popup *target.Info
 	for popup == nil {

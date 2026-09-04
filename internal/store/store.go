@@ -229,6 +229,71 @@ func (s *Store) MarkFeatureHandled(ctx context.Context, project, id, sha string)
 	return err
 }
 
+// RegisterManualRequest atomically records a ready, already-handled manual
+// feature and its Browser Agent job. A dashboard receipt must never point at a
+// feature whose job failed to enter the queue.
+func (s *Store) RegisterManualRequest(ctx context.Context, project string, ev model.FeatureEvent, j *model.Job, dedupKey string) (id int64, created bool, err error) {
+	if j == nil {
+		return 0, false, errors.New("manual request job is required")
+	}
+	if j.MaxAttempts == 0 {
+		j.MaxAttempts = 2
+	}
+	if j.Payload == "" {
+		j.Payload = "{}"
+	}
+	if j.ScheduledAt.IsZero() {
+		j.ScheduledAt = now()
+	}
+	t := ms(now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	_, err = tx.ExecContext(ctx, `INSERT INTO features(`+featureCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(project_id,id) DO UPDATE SET
+		status=excluded.status, latest_shipped_sha=excluded.latest_shipped_sha, shipped_at=excluded.shipped_at,
+		changed_paths=excluded.changed_paths, routes=excluded.routes, summary=excluded.summary, source=excluded.source,
+		readiness=excluded.readiness, ready_at=excluded.ready_at, last_handled_sha=excluded.last_handled_sha, updated_at=excluded.updated_at`,
+		ev.FeatureID, project, ev.Status, ev.ShippedSHA, ms(ev.ShippedAt), jsonList(ev.ChangedPaths), jsonList(ev.Routes), ev.Summary, ev.Source,
+		string(model.ReadinessReady), ms(ev.ShippedAt), ev.ShippedSHA, t, t)
+	if err != nil {
+		return 0, false, err
+	}
+	if dedupKey != "" {
+		err = tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE project_id=? AND dedup_key=? AND state IN ('READY','LEASED') LIMIT 1`, project, dedupKey).Scan(&id)
+		if err == nil {
+			if err = tx.Commit(); err != nil {
+				return 0, false, err
+			}
+			return id, false, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, false, err
+		}
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO jobs(project_id, kind, state, priority, scheduled_at, scenario_id, feature_id, browser, payload, attempt, max_attempts, lease_owner, lease_expires_at, last_error, dedup_key, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,0,?,'',NULL,'',?,?,?)`,
+		project, string(j.Kind), string(model.JobReady), j.Priority, ms(j.ScheduledAt), j.ScenarioID, j.FeatureID, string(j.Browser), j.Payload, j.MaxAttempts, dedupKey, t, t)
+	if err != nil {
+		return 0, false, err
+	}
+	id, err = res.LastInsertId()
+	if err != nil {
+		return 0, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, false, err
+	}
+	return id, true, nil
+}
+
 // ---- scenarios -----------------------------------------------------------
 
 const scenarioCols = `id, project_id, state, fingerprint, title, class, mutation, locks, current_version, oracle_source, oracle_feature, oracle_sha,
@@ -674,6 +739,42 @@ func (s *Store) RequeueJob(ctx context.Context, id int64, at time.Time, errText 
 	return false, s.CompleteJob(ctx, id, errText)
 }
 
+// RestorePreemptedJob gives a cooperatively cancelled worker's lease back to the
+// queue without charging an attempt. The lease owner guard prevents a late
+// cancellation from reviving work that another worker has already claimed.
+func (s *Store) RestorePreemptedJob(ctx context.Context, id int64, leaseOwner string, at time.Time, reason string) (restored bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var claimedAttempt int
+	err = tx.QueryRowContext(ctx, `UPDATE jobs
+		SET state='READY', scheduled_at=?, attempt=attempt-1, lease_owner='', lease_expires_at=NULL, last_error=?, updated_at=?
+		WHERE id=? AND state='LEASED' AND lease_owner=? AND attempt>0
+		RETURNING attempt+1`, ms(at), reason, ms(now()), id, leaseOwner).Scan(&claimedAttempt)
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Rollback()
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM job_attempts
+		WHERE job_id=? AND attempt=? AND worker_id=? AND finished_at IS NULL`, id, claimedAttempt, leaseOwner); err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ReapExpiredLeases returns dead-worker jobs to the ready queue (AC-21).
 func (s *Store) ReapExpiredLeases(ctx context.Context) (int64, error) {
 	t := ms(now())
@@ -848,6 +949,24 @@ func (s *Store) LatestRunsForDeployment(ctx context.Context, project, marker str
 }
 
 // HasRunForDeployment reports whether a run of scenario on browser exists for marker.
+// HasPassOnBrowser reports whether this scenario has ever passed on the given engine.
+// Pinning a scenario to an engine it has never passed on is how a green check goes red
+// silently, so the importer consults this before honouring a new pin.
+func (s *Store) HasPassOnBrowser(ctx context.Context, project, scenario string, browser model.Browser) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM runs WHERE project_id=? AND scenario_id=? AND browser=? AND outcome=?`,
+		project, scenario, string(browser), string(model.OutcomePass)).Scan(&n)
+	return n > 0, err
+}
+
+// ResetSoak returns a scenario to SOAK with a fresh counter, for when a change invalidates
+// the evidence that promoted it. Unlike approve it does not touch next_due_at.
+func (s *Store) ResetSoak(ctx context.Context, project, scenario string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE scenarios SET state=?, soak_passes=0, consecutive_failures=0, updated_at=? WHERE project_id=? AND id=?`,
+		string(model.StateSoak), time.Now().UTC().UnixMilli(), project, scenario)
+	return err
+}
+
 func (s *Store) HasRunForDeployment(ctx context.Context, project, scenario, marker string, browser model.Browser) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE project_id=? AND scenario_id=? AND deploy_marker=? AND browser=?`, project, scenario, marker, string(browser)).Scan(&n)

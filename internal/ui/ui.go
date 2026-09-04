@@ -1,12 +1,11 @@
 // Package ui serves a single-page live view of what vigil and its Browser
 // Agent are doing (PRD §15 evidence, §18 corpus health) for non-developers.
 //
-// It reads SQLite + evidence files only, with exactly one exception:
-// POST/DELETE /api/schedule/window writes the schedule.active_hours row in
-// scheduler_state. That row is the control channel to the `loop` process, which
-// runs separately and shares nothing but the database. No other route mutates
-// anything, and the endpoint is unauthenticated - bind `serve`/`loop --ui` to a
-// trusted address.
+// It reads SQLite + evidence files and exposes two operator controls.
+// POST/DELETE /api/schedule/window updates active hours. POST /api/requests
+// delegates a bounded read-only QA request to the loop process when configured.
+// Both controls are unauthenticated, so bind `serve`/`loop --ui` to a trusted
+// address.
 package ui
 
 import (
@@ -20,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"vigil/internal/config"
@@ -43,11 +43,25 @@ var scriptsHTML []byte
 var themeCSS []byte
 
 type Server struct {
-	cfg    *config.Config
-	st     *store.Store
-	evRoot string
-	devDir string // when set, page assets are read from this directory on every request
+	cfg              *config.Config
+	st               *store.Store
+	evRoot           string
+	devDir           string // when set, page assets are read from this directory on every request
+	requestSubmitter RequestSubmitter
+	submitMu         sync.Mutex
+	lastSubmitByHost map[string]time.Time
+	now              func() time.Time
 }
+
+// RequestSubmitter is the complete authority the dashboard receives for creating
+// a QA request. The implementation owns validation, persistence and preemption.
+type RequestSubmitter interface {
+	SubmitUserRequest(ctx context.Context, situation string) (featureID string, jobID int64, err error)
+}
+
+// SetRequestSubmitter enables POST /api/requests. Standalone read-only servers
+// intentionally leave it unset and return 503 for submissions.
+func (s *Server) SetRequestSubmitter(submitter RequestSubmitter) { s.requestSubmitter = submitter }
 
 // SetDevDir serves index.html/scripts.html/theme.css from dir instead of the embedded copies.
 func (s *Server) SetDevDir(dir string) { s.devDir = dir }
@@ -62,7 +76,11 @@ func (s *Server) asset(name string, embedded []byte) []byte {
 }
 
 func New(cfg *config.Config, st *store.Store, evidenceRoot string) *Server {
-	return &Server{cfg: cfg, st: st, evRoot: evidenceRoot}
+	return &Server{
+		cfg: cfg, st: st, evRoot: evidenceRoot,
+		lastSubmitByHost: make(map[string]time.Time),
+		now:              time.Now,
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -547,8 +565,13 @@ func intString(i int) string {
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
+	writeJSONStatus(w, http.StatusOK, v)
+}
+
+func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
@@ -820,10 +843,12 @@ func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
 
 type requestView struct {
 	FeatureID   string   `json:"feature_id"`
+	JobID       int64    `json:"job_id,omitempty"`
 	Summary     string   `json:"summary"`
 	RequestedAt string   `json:"requested_at"`
 	Dir         string   `json:"dir"`
-	Status      string   `json:"status"` // running | done | none
+	Status      string   `json:"status"` // queued | running | done | failed | none
+	Error       string   `json:"error,omitempty"`
 	Decision    string   `json:"decision,omitempty"`
 	Reason      string   `json:"reason,omitempty"`
 	Evidence    string   `json:"evidence,omitempty"`
@@ -835,17 +860,75 @@ type requestView struct {
 	Gate        string   `json:"gate,omitempty"`
 }
 
-// requests lists manual QA requests (features with source=manual) with their latest agent run.
+// requests creates a bounded QA request or lists earlier requests and their
+// persisted queue state.
 func (s *Server) requests(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.listRequests(w, r)
+	case http.MethodPost:
+		s.submitRequest(w, r)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		writeAPIError(w, http.StatusMethodNotAllowed, "지원하지 않는 요청 방식입니다")
+	}
+}
+
+func (s *Server) listRequests(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	p := s.cfg.Project.ID
-	feats, _ := s.st.ListFeatures(ctx, p)
+	feats, err := s.st.ListFeatures(ctx, p)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "QA 요청을 불러오지 못했습니다")
+		return
+	}
+	jobs, err := s.st.ListJobs(ctx, p, nil, 1000)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "QA 요청 상태를 불러오지 못했습니다")
+		return
+	}
+	latestJob := make(map[string]*model.Job)
+	var leasedAgentID int64
+	for _, job := range jobs {
+		if job.State == model.JobLeased && isAgentJob(job.Kind) {
+			leasedAgentID = job.ID
+		}
+		if job.FeatureID == "" {
+			continue
+		}
+		old := latestJob[job.FeatureID]
+		if old == nil || job.CreatedAt.After(old.CreatedAt) || (job.CreatedAt.Equal(old.CreatedAt) && job.ID > old.ID) {
+			latestJob[job.FeatureID] = job
+		}
+	}
+	agentBudgetUsed, _ := s.st.BudgetUsed(ctx, p, "agent", time.Hour)
 	var out []requestView
 	for _, f := range feats {
-		if f.Source != "manual" {
+		if f.Source != "manual" && f.Source != "user" && f.Source != "ui" {
 			continue
 		}
 		rv := requestView{FeatureID: f.ID, Summary: f.Summary, RequestedAt: fmtT(&f.ShippedAt), Status: "none"}
+		if job := latestJob[f.ID]; job != nil {
+			rv.JobID = job.ID
+			rv.Error = job.LastError
+			switch job.State {
+			case model.JobReady:
+				switch {
+				case job.Priority >= model.PriorityUserRequest && leasedAgentID != 0 && leasedAgentID != job.ID:
+					rv.Status = "preempting"
+				case job.Priority < model.PriorityUserRequest && s.cfg.Budget.AgentTasksPerHour > 0 && agentBudgetUsed >= int64(s.cfg.Budget.AgentTasksPerHour):
+					rv.Status = "budget_waiting"
+				default:
+					rv.Status = "queued"
+				}
+			case model.JobLeased:
+				rv.Status = "running"
+			case model.JobDone:
+				rv.Status = "done"
+			case model.JobFailed:
+				rv.Status = "failed"
+			}
+		}
 		root := filepath.Join(s.evRoot, "agent", f.ID)
 		entries, _ := os.ReadDir(root)
 		var newest string
@@ -861,7 +944,9 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request) {
 		}
 		if newest != "" {
 			rv.Dir = s.rel(newest)
-			rv.Status = "running"
+			if rv.Status == "none" {
+				rv.Status = "running"
+			}
 			if b, err := os.ReadFile(filepath.Join(newest, "agent-result.json")); err == nil {
 				var res struct {
 					Decision    string   `json:"decision"`
@@ -873,12 +958,15 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request) {
 					VisitedURLs []string `json:"visited_urls"`
 				}
 				_ = json.Unmarshal(b, &res)
-				rv.Status, rv.Decision, rv.Reason, rv.Evidence = "done", res.Decision, res.Reason, clip(res.Evidence, 6000)
+				if rv.JobID == 0 {
+					rv.Status = "done"
+				}
+				rv.Decision, rv.Reason, rv.Evidence = res.Decision, res.Reason, clip(res.Evidence, 6000)
 				rv.Candidates, rv.ToolCalls, rv.VisitedURLs = len(res.Candidates), res.ToolCalls, res.VisitedURLs
 				if res.Duration > 0 {
 					rv.Duration = (time.Duration(res.Duration)).Round(time.Second).String()
 				}
-			} else if time.Since(newestT) > 20*time.Minute {
+			} else if rv.JobID == 0 && time.Since(newestT) > 20*time.Minute {
 				rv.Status = "stale"
 			}
 			if b, err := os.ReadFile(filepath.Join(newest, "gate.json")); err == nil {
@@ -899,4 +987,13 @@ func (s *Server) requests(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].RequestedAt > out[j].RequestedAt })
 	writeJSON(w, map[string]any{"requests": out, "now": time.Now()})
+}
+
+func isAgentJob(kind model.JobKind) bool {
+	switch kind {
+	case model.JobAgentDiscover, model.JobAgentVerify, model.JobAgentRepair:
+		return true
+	default:
+		return false
+	}
 }

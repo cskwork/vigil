@@ -91,7 +91,22 @@ cp vigil.example.yaml vigil.yaml         # point target.base_url at your app
 ```
 
 The dashboard at `:8787` shows verification results, running jobs, the
-coverage-growth panel and the schedule window — readable by non-developers.
+coverage-growth panel and the schedule window. Its main page also has one text
+box for an operator to describe a QA situation. Vigil forces these submissions
+to `read-only` and gives them priority 110, above repair and recent-failure work
+at priority 100.
+
+If the same `loop --ui` process is running another Browser Agent job, it cancels
+that job cooperatively, returns it to `READY` without charging an attempt or
+Agent budget, and runs the operator request next. Deterministic scenario workers
+continue uninterrupted. The operator request may bypass the hourly Agent budget
+once. Any scenario it proposes still passes the existing candidate validation,
+deduplication, oracle, and SOAK gates.
+
+Dashboard controls are unauthenticated. Bind `loop --ui` and `serve` only to a
+trusted address such as `127.0.0.1`. Standalone `serve` shows the QA box but
+keeps submission disabled; use `loop --ui` with an available Browser Agent to
+submit a request.
 
 ## Status
 
@@ -218,8 +233,8 @@ Then:
 | `list [--state A,B]` | List scenarios, optionally filtered by comma-separated states |
 | `show <scenario>` | Current script YAML, coverage links, metrics, last 10 runs |
 | `validate` | Parse and validate every scenario/flow file; flags duplicate ids and duplicate fingerprints; exit 1 on problems |
-| `serve [--addr 127.0.0.1:8787]` | Read-only live web view for non-developers: what is running/queued, recent results with per-step detail, what the Browser Agent is doing (tool-call timeline), scenarios, incidents, features. Reads SQLite + evidence only |
-| `loop --ui <addr>` | `loop` plus the same live view in-process |
+| `serve [--addr 127.0.0.1:8787]` | Standalone live web view for non-developers. QA submission stays disabled because no in-process scheduler owns the request; existing schedule controls remain available |
+| `loop --ui <addr>` | `loop` plus the live view and one-box, read-only QA submission. An available Browser Agent is required |
 | `request <file.yaml> [--queue] [--dry-run]` | Hand a manual QA request to the orchestrator: `feature_id`, `summary`, `entry_url`, `accounts` (named test accounts, no secrets), `instructions` (the flow in plain language), `mutation` (read-only / reversible / destructive), `locks`, `max_tool_calls`, `timeout_minutes`. The Browser Agent performs the flow with one isolated browser session per role (`"session":"teacher"`) and proposes scripts; `--queue` leaves it for a running loop |
 | `doctor [--install]` | Check config/targets, sqlite, evidence dir, repo/branch, Lightpanda binary + serve, Chromium, pi, API keys, extension, nono, agent, target HTTP, asset marker |
 
@@ -310,7 +325,7 @@ Network failures never error: the gate answers WAITING and logs. The scheduler t
 | Key | Default | Meaning |
 |---|---|---|
 | `browser.primary` | `lightpanda` | Default functional browser |
-| `browser.fallback` | `chromium` | Confirmation browser |
+| `browser.fallback` | `chromium` | Not read. The confirmation browser is always Chromium (`scheduler.pickBrowser`); the key is accepted for compatibility and ignored |
 | `browser.lightpanda.binary` | `bin/lightpanda` | Launched as `serve --host H --port P`; an already healthy server on H:P is attached instead |
 | `browser.lightpanda.host` / `.port` | `127.0.0.1` / `9333` | Never `9222` |
 | `browser.chromium.binary` | `""` | Explicit Chromium / headless-shell path |
@@ -353,14 +368,15 @@ Network failures never error: the gate answers WAITING and logs. The scheduler t
 | `provider` | `pi` | |
 | `model` | `zai/glm-5.3-flash` | `<provider>/<model>` |
 | `thinking` | `high` | |
-| `timeout` | `12m` | Per agent task |
+| `timeout` | `20m` | Per agent task |
 | `extension` | `piext/vigil-browser.js` | pi extension exposing `agent_browser`; bundled file by default, pi-agent-browser-native as fallback |
 | `env_map` | | `{PI_VAR: SHELL_VAR}`; `doctor` warns when SHELL_VAR is empty |
 | `retries` / `backoff` | `3` / `45s` | Transient errors (rate limit, 429, 5xx, timeouts) retry with linear backoff |
-| `max_turns` | `60` | Tool-call budget; exceeding it yields NEEDS_REVIEW |
-| `workdir` | | Optional working directory |
+| `max_turns` | `40` | Tool-call budget; exceeding it yields NEEDS_REVIEW |
+| `workdir` | | Not read. The agent runs in the evidence directory for the task; the key is accepted and ignored |
 | `sandbox` | `auto` | `auto` (nono when on PATH), `nono`, `none` |
 | `sandbox_network_filter` | `false` | Use `nono run` with a proxy allowlist of `target.allowed_hosts` |
+| `max_scenarios_per_task` | `3` | Candidate scenarios per agent task |
 
 ### evidence retention
 
@@ -369,7 +385,8 @@ Evidence never grows unbounded. Hourly (and at loop start) vigil applies: pass r
 ### evidence.chromium_capture
 
 `per-deploy` (default): after a scenario passes on Lightpanda, vigil runs it once more on Chromium for each new deployment marker so the verification report carries a real rendered screenshot (Lightpanda does not paint; its captures are text renderings). Background priority, one Chromium run per scenario per build. `off` disables it.
-| `max_scenarios_per_task` | `3` | Candidate scenarios per agent task |
+
+This needs a deployment marker, and only `deployment.readiness.strategy: asset_version` produces one. Under the default `delay` strategy the marker is always empty, so the Chromium capture never runs and every screenshot stays a Lightpanda text rendering — `steps.json` records `capabilities.screenshot_painted: false` when that is the case.
 
 ### personas / paths
 
@@ -539,6 +556,7 @@ For a READY (or DEPLOYMENT_UNKNOWN) feature the orchestrator picks: `RUN_IMPACTE
 
 | Priority | Value | When |
 |---|---|---|
+| Operator QA request | 110 | Main-page read-only request; runs before repair work |
 | Recent failure | 100 | `consecutive_failures > 0`, inline `run`, repair, Chromium confirm, post-failure re-run |
 | New direct coverage | 90 | `AGENT_DISCOVER` / `AGENT_VERIFY` jobs |
 | Soak | 80 | SOAK scenarios |

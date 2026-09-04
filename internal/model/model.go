@@ -113,6 +113,7 @@ const (
 
 // Priority: higher runs first (PRD §12).
 const (
+	PriorityUserRequest       = 110
 	PriorityRecentFailure     = 100
 	PriorityNewDirectCoverage = 90
 	PrioritySoak              = 80

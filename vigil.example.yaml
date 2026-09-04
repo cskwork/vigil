@@ -36,7 +36,6 @@ deployment:
 
 browser:
   primary: lightpanda
-  fallback: chromium
   lightpanda: { binary: bin/lightpanda, host: 127.0.0.1, port: 9333 }
   chromium: { binary: "", headless: true }   # empty = auto-detect
   step_timeout: 15s

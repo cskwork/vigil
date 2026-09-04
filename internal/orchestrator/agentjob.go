@@ -50,8 +50,8 @@ type GateOutcome struct {
 // HandleAgentJob executes an agent job end-to-end: build Request, run adapter,
 // gate candidates (oracle/dedup/validate), persist CANDIDATE→SOAK or NEEDS_REVIEW/EPHEMERAL/DUPLICATE.
 //
-// When the model is unavailable the job is requeued with backoff (store.RequeueJob)
-// and nil is returned: the caller must not CompleteJob a job that is READY again.
+// When the model is unavailable the job is requeued with backoff and
+// ErrAgentJobRequeued is returned so the caller preserves READY.
 func (o *Orchestrator) HandleAgentJob(ctx context.Context, job *model.Job) error {
 	if job == nil {
 		return errors.New("orchestrator: nil job")
@@ -89,9 +89,6 @@ func (o *Orchestrator) HandleAgentJob(ctx context.Context, job *model.Job) error
 		return err
 	}
 	dir := o.agentDir(firstNonEmpty(p.FeatureID, p.ScenarioID, "task"), o.now())
-	if err := o.st.RecordBudget(ctx, o.cfg.Project.ID, "agent", 1); err != nil {
-		return err
-	}
 	res, err := o.agent.Run(ctx, req, dir)
 	if err != nil {
 		return fmt.Errorf("agent job %d: %w", job.ID, err)
@@ -108,7 +105,7 @@ func (o *Orchestrator) HandleAgentJob(ctx context.Context, job *model.Job) error
 			return err
 		}
 		o.logger.Printf("agent job %d: model unavailable (%s); requeued=%v at %s (deterministic QA continues)", job.ID, res.Reason, requeued, at.Format(time.RFC3339))
-		return nil
+		return ErrAgentJobRequeued
 	}
 
 	var gates []GateOutcome

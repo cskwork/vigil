@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -48,6 +49,70 @@ func TestJobClaimAndLease(t *testing.T) {
 	}
 	if _, err := s.ClaimJob(ctx, "p", "w3", time.Second); err != nil {
 		t.Fatalf("reaped job should be claimable: %v", err)
+	}
+}
+
+func TestRestorePreemptedJobReturnsLeaseWithoutChargingAttempt(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	id, _, err := s.EnqueueJob(ctx, &model.Job{ProjectID: "p", Kind: model.JobAgentDiscover, Priority: 90, FeatureID: "old"}, "agent:old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.ClaimJob(ctx, "p", "agent-1", time.Minute, model.JobAgentDiscover)
+	if err != nil || j.ID != id || j.Attempt != 1 {
+		t.Fatalf("claim = %+v, %v", j, err)
+	}
+
+	restored, err := s.RestorePreemptedJob(ctx, id, "agent-1", time.Now(), "preempted by user request")
+	if err != nil || !restored {
+		t.Fatalf("restore = %v, %v", restored, err)
+	}
+	ready, err := s.ClaimJob(ctx, "p", "agent-2", time.Minute, model.JobAgentDiscover)
+	if err != nil || ready.ID != id || ready.Attempt != 1 {
+		t.Fatalf("reclaim = %+v, %v; cancelled attempt must not count", ready, err)
+	}
+	var attempts int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM job_attempts WHERE job_id=?`, id).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 {
+		t.Fatalf("job_attempts = %d, want only the replacement claim", attempts)
+	}
+}
+
+func TestRestorePreemptedJobRejectsStaleOwner(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	id, _, _ := s.EnqueueJob(ctx, &model.Job{ProjectID: "p", Kind: model.JobAgentDiscover, Priority: 90, FeatureID: "old"}, "agent:old")
+	_, _ = s.ClaimJob(ctx, "p", "agent-1", time.Minute, model.JobAgentDiscover)
+
+	restored, err := s.RestorePreemptedJob(ctx, id, "not-the-owner", time.Now(), "preempted")
+	if err != nil || restored {
+		t.Fatalf("restore = %v, %v", restored, err)
+	}
+	jobs, _ := s.ListJobs(ctx, "p", []model.JobState{model.JobLeased}, 10)
+	if len(jobs) != 1 || jobs[0].ID != id || jobs[0].Attempt != 1 {
+		t.Fatalf("stale restore changed leased job: %+v", jobs)
+	}
+}
+
+func TestRegisterManualRequestRollsBackFeatureWhenJobInsertFails(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	if _, err := s.DB().Exec(`CREATE TRIGGER reject_manual_job BEFORE INSERT ON jobs BEGIN SELECT RAISE(FAIL, 'job rejected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	ev := model.FeatureEvent{FeatureID: "user-qa-1", Status: "requested", ShippedSHA: "manual-1", ShippedAt: now, Summary: "check login", Source: "manual"}
+	_, _, err := s.RegisterManualRequest(ctx, "p", ev, &model.Job{
+		ProjectID: "p", Kind: model.JobAgentDiscover, Priority: model.PriorityUserRequest, FeatureID: ev.FeatureID,
+	}, "request:1")
+	if err == nil {
+		t.Fatal("expected job insert failure")
+	}
+	if _, err := s.GetFeature(ctx, "p", ev.FeatureID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("feature survived rolled-back request: %v", err)
 	}
 }
 

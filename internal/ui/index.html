@@ -30,6 +30,18 @@
     </header>
     <main>
       <div id="fetchErr"></div>
+      <section class="panel qa-intake" aria-labelledby="qaTitle">
+        <header><h2 id="qaTitle">지금 확인할 QA 상황</h2><p>화면에서 확인할 상황을 평소 말하듯 적어 주세요.</p></header>
+        <form id="qaForm" class="qa-form">
+          <label for="qaSituation">QA 상황</label>
+          <textarea id="qaSituation" name="situation" rows="4" maxlength="8000" required placeholder="예: 로그인한 뒤 결제 화면에서 뒤로 가기를 누르면 입력한 내용이 유지되는지 확인해 주세요."></textarea>
+          <div class="qa-actions">
+            <p class="sub">읽기 전용으로 실행합니다. 현재 Browser Agent 작업은 안전하게 대기열로 돌린 뒤 이 요청을 먼저 확인합니다.</p>
+            <button class="btn primary" id="qaSubmit" type="submit">지금 확인</button>
+          </div>
+          <p id="qaFeedback" class="qa-feedback" role="status" aria-live="polite"></p>
+        </form>
+      </section>
       <section aria-label="요약">
         <div class="kpis" id="kpis">
           <article class="kpi north"><h3>서비스 상태</h3><div class="value"><div class="skel" style="width:60%"></div></div><p class="delta">불러오는 중</p></article>
@@ -99,6 +111,41 @@ const markerLabel = (m) => { const n = Number(m); return isFinite(n) && n > 1e12
 let data = null, marker = new URLSearchParams(location.search).get('marker') || '', openRow = null, tab = 'steps', query = '';
 $('q').oninput = (e) => { query = e.target.value.trim().toLowerCase(); render(); };
 
+let qaSubmitting = false;
+$('qaForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const situation = $('qaSituation').value.trim();
+  if (!situation || qaSubmitting) return;
+  qaSubmitting = true;
+  $('qaSubmit').disabled = true;
+  $('qaSubmit').textContent = '접수 중';
+  $('qaForm').setAttribute('aria-busy', 'true');
+  $('qaFeedback').className = 'qa-feedback';
+  $('qaFeedback').textContent = '요청을 접수하고 현재 Browser Agent 작업을 안전하게 넘기는 중입니다.';
+  try {
+    const r = await fetch('/api/requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ situation })
+    });
+    const result = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(result.error || `접수하지 못했습니다 (HTTP ${r.status})`);
+    $('qaSituation').value = '';
+    $('qaFeedback').className = result.warning ? 'qa-feedback warning' : 'qa-feedback success';
+    $('qaFeedback').textContent = result.warning || `접수했습니다. 요청 ${result.feature_id}을 가장 먼저 확인합니다.`;
+    reqData = null;
+    await renderRequests();
+  } catch (err) {
+    $('qaFeedback').className = 'qa-feedback error';
+    $('qaFeedback').textContent = err.message;
+  } finally {
+    qaSubmitting = false;
+    $('qaSubmit').disabled = false;
+    $('qaSubmit').textContent = '지금 확인';
+    $('qaForm').removeAttribute('aria-busy');
+  }
+};
+
 async function refresh() {
   try {
     const r = await fetch('/api/verification' + (marker ? '?marker=' + encodeURIComponent(marker) : ''), { cache: 'no-store' });
@@ -142,7 +189,7 @@ function render() {
 
   const vis = checks.filter(c => !query || (c.title || '').toLowerCase().includes(query) || c.scenario_id.toLowerCase().includes(query));
   $('checks').innerHTML = vis.length ? vis.map(c => {
-    const ev = c.not_verified ? '<span class="sub">없음</span>' : `<span class="evi"><span class="${c.screenshot ? 'has' : ''}">화면 캡처</span><span class="${c.steps ? 'has' : ''}">단계 ${c.steps}</span><span class="${c.requests ? 'has' : ''}">서버 응답 ${c.requests}</span>${c.console_errors ? `<span class="has">콘솔 오류 ${c.console_errors}</span>` : ''}</span>`;
+    const ev = c.not_verified ? '<span class="sub">없음</span>' : `<span class="evi"><span class="${c.screenshot ? 'has' : ''}">화면 캡처${c.screenshot && c.browser === 'lightpanda' ? ' (텍스트)' : ''}</span><span class="${c.steps ? 'has' : ''}">단계 ${c.steps}</span><span class="${c.requests ? 'has' : ''}">서버 응답 ${c.requests}</span>${c.console_errors ? `<span class="has">콘솔 오류 ${c.console_errors}</span>` : ''}</span>`;
     const why = !c.not_verified && c.outcome !== 'PASS' ? `<div class="sub">${c.failed_step ? `${c.failed_step}단계 "${esc(STEP[c.failed_action] || c.failed_action)}"에서 멈춤: ${esc(c.actual || c.error)}` : esc(c.error)}</div>` : '';
     const row = `<tr class="${c.not_verified ? '' : 'click'}${openRow === c.scenario_id ? ' sel' : ''}" data-id="${esc(c.scenario_id)}" data-dir="${esc(c.evidence_rel)}"><td><div class="t">${esc(c.title || c.scenario_id)}</div><div class="sub">${esc(CLASS[c.class] || c.class)}${c.browser ? ` · ${esc(BROWSER[c.browser] || c.browser)}` : ''} ${dev(c.scenario_id + (c.version ? ' v' + c.version : '') + (c.run_id ? ' run#' + c.run_id : ''))}</div>${why}</td><td class="st-cell">${c.not_verified ? st({ x: ['이 배포에서 미실행', 'muted'] }, 'x') : st(OUTCOME, c.outcome)}</td><td class="hide-sm">${ev}</td><td class="hide-sm when">${c.finished_at ? hm(c.finished_at) + `<div class="sub">${ago(c.finished_at)}</div>` : ''}</td><td class="num hide-sm">${c.duration_ms ? secs(c.duration_ms) : ''}</td></tr>`;
     const det = openRow === c.scenario_id ? `<tr><td colspan="5"><div class="tabs">${[['steps', '단계'], ['shots', '화면 캡처'], ['net', '서버 응답'], ['console', '콘솔']].map(([k, l]) => `<button class="${tab === k ? 'active' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="detail"><div class="skel"></div></div><p class="sub dev">증적: <a href="/evidence/${esc(c.evidence_rel)}/" target="_blank" rel="noopener">${esc(c.evidence_rel)}</a></p></td></tr>` : '';
@@ -167,11 +214,12 @@ async function renderRequests() {
   const list = reqData.requests || [];
   const sec = $('requests'); sec.hidden = !list.length; if (!list.length) return;
   const D = { NEW_SCRIPT: ['새 검사 항목 제안', 'ok'], PATCH_SCRIPT: ['검사 수리안 제안', 'ok'], APP_FAILURE: ['서비스 문제 발견', 'bad'], NO_NEW_COVERAGE: ['추가할 검사 없음', 'muted'], NEEDS_REVIEW: ['사람 확인 필요', 'warn'], ORACLE_UNKNOWN: ['판단 기준 불명확', 'warn'] };
-  const S = { running: ['진행 중', 'ok'], done: ['완료', 'muted'], stale: ['응답 없음', 'warn'], none: ['미실행', 'muted'] };
+  const S = { queued: ['접수됨', 'info'], preempting: ['기존 작업 정리 중', 'info'], running: ['진행 중', 'ok'], budget_waiting: ['예산 대기', 'warn'], done: ['완료', 'muted'], failed: ['실패', 'bad'], stale: ['응답 없음', 'warn'], none: ['미실행', 'muted'] };
   $('requestsBody').innerHTML = list.map(q => `
     <div class="check" style="padding:12px 0;border-bottom:1px solid var(--line)">
       <div class="agent-head"><b>${esc(q.summary || q.feature_id)}</b>${st(S, q.status)}${q.decision ? st(D, q.decision) : ''}<span class="sub">${esc(q.requested_at)}${q.duration ? ` · ${esc(q.duration)}` : ''}${q.tool_calls ? ` · 브라우저 조작 ${q.tool_calls}회` : ''}${q.candidates ? ` · 제안 스크립트 ${q.candidates}개` : ''}</span><button class="btn" data-req="${esc(q.feature_id)}" style="margin-left:auto">${reqOpen === q.feature_id ? '접기' : '결과 보기'}</button></div>
       ${reqOpen === q.feature_id ? `
+        ${q.error ? `<div class="errbox">${esc(q.error)}</div>` : ''}
         ${q.reason ? `<p class="sub">${esc(q.reason)}</p>` : ''}
         ${q.evidence ? `<div class="msg">${esc(q.evidence)}</div>` : '<div class="empty">아직 결과 텍스트가 없습니다.</div>'}
         ${(q.screenshots || []).length ? `<div class="shots">${q.screenshots.map(s => `<figure><a href="/evidence/${esc(s)}" target="_blank" rel="noopener"><img src="/evidence/${esc(s)}" alt="요청 수행 화면" loading="lazy"></a><figcaption>${esc(s.split('/').pop())}</figcaption></figure>`).join('')}</div>` : ''}
@@ -216,7 +264,7 @@ function toMarkdown() {
   L.push('| 검사 항목 | 결과 | 검증 시각 | 증거 |', '|---|---|---|---|');
   for (const c of checks) {
     const res = c.not_verified ? '미실행' : (OUTCOME[c.outcome] || [c.outcome])[0];
-    const ev = c.not_verified ? '' : [c.screenshot ? '화면' : '', c.steps ? `단계 ${c.steps}` : '', c.requests ? `응답 ${c.requests}` : ''].filter(Boolean).join(', ');
+    const ev = c.not_verified ? '' : [c.screenshot ? (c.browser === 'lightpanda' ? '화면(텍스트 렌더링)' : '화면') : '', c.steps ? `단계 ${c.steps}` : '', c.requests ? `응답 ${c.requests}` : ''].filter(Boolean).join(', ');
     L.push(`| ${c.title || c.scenario_id} | ${res}${!c.not_verified && c.outcome !== 'PASS' && (c.actual || c.error) ? ` (${(c.actual || c.error).replace(/\|/g, '/')})` : ''} | ${c.finished_at || ''} | ${ev} |`);
   }
   return L.join('\n');

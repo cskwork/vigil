@@ -173,3 +173,42 @@ func TestRedactorHidesJWTAndEntityEncodedParams(t *testing.T) {
 		t.Fatalf("non-credential param must survive: %s", out)
 	}
 }
+
+// Lightpanda passes look identical to Chromium passes in steps.json, yet its capture is a
+// text rendering. The evidence must say so on its own, without a reader knowing the engine.
+func TestRecordBrowserCapabilitiesMarksLightpandaUnpainted(t *testing.T) {
+	cases := []struct {
+		name        string
+		browser     model.Browser
+		wantRecords bool
+	}{
+		{"lightpanda has no paint pipeline", model.BrowserLightpanda, true},
+		{"chromium paints, so it claims no limit", model.BrowserChromium, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &session{spec: Spec{Browser: tc.browser}, res: &Result{Capabilities: map[string]bool{}}}
+			s.recordBrowserCapabilities()
+
+			painted, recorded := s.res.Capabilities["screenshot_painted"]
+			if !tc.wantRecords {
+				if recorded {
+					t.Fatalf("screenshot_painted recorded for %s; only measured engine limits belong in capabilities", tc.browser)
+				}
+				if _, ok := s.res.Capabilities["exception_events"]; ok {
+					t.Fatalf("exception_events recorded for %s", tc.browser)
+				}
+				return
+			}
+			if !recorded {
+				t.Fatal("screenshot_painted missing: a text rendering would be indistinguishable from a real screen")
+			}
+			if painted {
+				t.Fatal("screenshot_painted = true for lightpanda, want false")
+			}
+			if ev, ok := s.res.Capabilities["exception_events"]; !ok || ev {
+				t.Fatalf("exception_events = (%v, present=%v), want (false, present=true)", ev, ok)
+			}
+		})
+	}
+}

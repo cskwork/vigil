@@ -13,6 +13,8 @@ vigil.local.yaml
 .DS_Store
 .playwright-cli/
 # domain-specific, local only (ship *.example.* and examples/ instead)
+# *.hml: Korean HWPML source documents used as local test material; never shippable
+*.hml
 /vigil.yaml
 /url.md
 /scenarios/

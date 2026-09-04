@@ -595,6 +595,22 @@ Target navigation is restricted to configured/allowlisted domains.
 
 Secrets must be redacted from agent output and evidence.
 
+### Operator QA request
+
+The main dashboard page has one text box for a non-developer to describe a QA
+situation. The server accepts only the situation text, generates the feature
+identifier, and forces the Browser Agent request to `read-only`. The UI cannot
+set accounts, target URLs, mutation level, timeout, or tool budget.
+
+The request enters the Agent queue at priority 110. If the same loop process is
+running another Browser Agent job, the scheduler cancels that job cooperatively
+and returns it to `READY` without consuming an attempt or Agent budget. It does
+not cancel deterministic scenario workers. The displaced job resumes later.
+
+The prioritized request may bypass `agent_tasks_per_hour` once so it can run
+next when a Browser Agent is available. Its output remains a proposal. Existing
+candidate validation, deduplication, oracle, and SOAK rules still apply.
+
 ---
 
 ## 12. Impact and scheduling
@@ -614,7 +630,8 @@ Impact signals, strongest first:
 Priority:
 
 ```text
-recent confirmed failure
+operator QA request (110)
+→ recent confirmed failure / repair (100)
 → new direct coverage
 → soak
 → impacted old coverage
@@ -656,6 +673,9 @@ budget:
 ```
 
 Under pressure, defer background work rather than duplicating or dropping high-priority work.
+
+An operator QA request gets one budget bypass for its next claim. This exception
+does not disable the hourly budget for later Agent jobs.
 
 ---
 
@@ -762,6 +782,13 @@ The scheduler must not run conflicting mutable scenarios concurrently.
 This prevents false failures caused by tests changing the same account/state.
 
 Read-only scenarios need no lock unless the application itself requires one.
+
+### Dashboard trust boundary
+
+Dashboard controls are unauthenticated. Same-origin checks and submission rate
+limits do not replace authentication. Bind `loop --ui` and `serve` only to a
+trusted address. Standalone `serve` has no request submitter and rejects QA
+submissions; `loop --ui` enables them only when the Browser Agent is available.
 
 ---
 
@@ -942,6 +969,8 @@ vigil loop
 vigil status
 vigil coverage
 vigil incidents
+vigil serve
+vigil loop --ui 127.0.0.1:8787
 vigil doctor
 ```
 
@@ -1040,6 +1069,10 @@ workers:
 | AC-22 | Tens of thousands of stored scenarios remain selectively queryable/schedulable without loading or executing the whole corpus. |
 | AC-23 | Restart preserves feature, scenario, script, queue, result and incident state. |
 | AC-24 | Continuous generation cannot bypass candidate/dedup/oracle/promotion gates. |
+| AC-25 | The main dashboard accepts one bounded read-only QA situation and schedules it at priority 110, above priority-100 repair work. |
+| AC-26 | A user request cooperatively requeues only the active Browser Agent job without charging its attempt or budget; deterministic workers continue. |
+| AC-27 | A prioritized user request may bypass the hourly Agent budget once, but its candidates still pass the existing validation and SOAK lifecycle. |
+| AC-28 | Dashboard controls require a trusted bind because they are unauthenticated; standalone `serve` rejects QA submissions. |
 
 ---
 

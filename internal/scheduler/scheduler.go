@@ -9,6 +9,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -64,6 +65,8 @@ const (
 var runKinds = []model.JobKind{model.JobRunScenario, model.JobChromiumConfirm, model.JobValidateCandidate, model.JobChromiumEvidence}
 var agentKinds = []model.JobKind{model.JobAgentDiscover, model.JobAgentVerify, model.JobAgentRepair}
 
+var errJobNotReady = errors.New("job is not ready")
+
 type Scheduler struct {
 	cfg  *config.Config
 	st   *store.Store
@@ -88,6 +91,11 @@ type Scheduler struct {
 	budgetWarned      bool
 	agentBudgetWarned bool
 	windowWarned      bool
+
+	agentMu       sync.Mutex
+	activeAgent   *activeAgentJob
+	priorityAgent []int64
+	agentWake     chan struct{}
 }
 
 // New wires the concrete production types. Nil pointers are tolerated
@@ -111,16 +119,17 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, r
 // NewWith accepts interfaces so tests can inject fakes.
 func NewWith(cfg *config.Config, st *store.Store, orch Orchestrator, run Runner, g Gate, in ingest.Adapter) *Scheduler {
 	s := &Scheduler{
-		cfg:      cfg,
-		st:       st,
-		orch:     orch,
-		run:      run,
-		gate:     g,
-		in:       in,
-		ev:       evidence.New(cfg.Abs(cfg.Evidence.Dir)),
-		Log:      log.Default(),
-		Classify: classify.Classify,
-		Now:      func() time.Time { return time.Now().UTC() },
+		cfg:       cfg,
+		st:        st,
+		orch:      orch,
+		run:       run,
+		gate:      g,
+		in:        in,
+		ev:        evidence.New(cfg.Abs(cfg.Evidence.Dir)),
+		Log:       log.Default(),
+		Classify:  classify.Classify,
+		Now:       func() time.Time { return time.Now().UTC() },
+		agentWake: make(chan struct{}, 1),
 	}
 	s.TargetHealthy = s.probeTarget
 	return s
@@ -540,15 +549,24 @@ func (s *Scheduler) workerLoop(ctx context.Context, workerID, kind string, kinds
 	}
 	for ctx.Err() == nil {
 		_ = s.st.HeartbeatWorker(ctx, workerID, kind)
-		if kind == "agent" && s.agentBudgetExhausted(ctx) {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(idle):
-			}
+		priorityID, priority := s.nextPriorityAgent()
+		if kind == "agent" && !priority {
+			priorityID, priority = s.nextPersistedUserRequest(ctx)
+		}
+		if kind == "agent" && !priority && s.agentBudgetExhausted(ctx) {
+			s.waitForWorker(ctx, idle, true)
 			continue
 		}
-		job, err := s.st.ClaimJob(ctx, s.project(), workerID, leaseDuration, kinds...)
+		var job *model.Job
+		var err error
+		if kind == "agent" && priority {
+			job, err = s.claimUserRequestByID(ctx, priorityID, workerID)
+			if err == nil || errors.Is(err, errJobNotReady) {
+				s.consumePriorityAgent(priorityID)
+			}
+		} else {
+			job, err = s.st.ClaimJob(ctx, s.project(), workerID, leaseDuration, kinds...)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -556,15 +574,34 @@ func (s *Scheduler) workerLoop(ctx context.Context, workerID, kind string, kinds
 			if err != store.ErrNotFound {
 				s.logf("worker %s: claim: %v", workerID, err)
 			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(idle):
-			}
+			s.waitForWorker(ctx, idle, kind == "agent")
 			continue
 		}
-		s.execute(ctx, workerID, job)
+		if kind == "agent" {
+			s.executeAgent(ctx, workerID, job)
+		} else {
+			s.execute(ctx, workerID, job)
+		}
 	}
+}
+
+func (s *Scheduler) executeAgent(ctx context.Context, workerID string, job *model.Job) {
+	jobCtx, cancel := context.WithCancelCause(ctx)
+	s.agentMu.Lock()
+	s.activeAgent = &activeAgentJob{jobID: job.ID, cancel: cancel}
+	if len(s.priorityAgent) > 0 && s.priorityAgent[0] != job.ID {
+		cancel(errAgentPreempted)
+	}
+	s.agentMu.Unlock()
+
+	s.execute(jobCtx, workerID, job)
+	cancel(nil)
+
+	s.agentMu.Lock()
+	if s.activeAgent != nil && s.activeAgent.jobID == job.ID {
+		s.activeAgent = nil
+	}
+	s.agentMu.Unlock()
 }
 
 // agentBudgetExhausted reports whether budget.agent_tasks_per_hour is spent;
@@ -613,7 +650,29 @@ func (s *Scheduler) execute(ctx context.Context, workerID string, job *model.Job
 		}
 		started := s.Now()
 		err := s.orch.HandleAgentJob(ctx, job)
+		if errors.Is(context.Cause(ctx), errAgentPreempted) && errors.Is(err, context.Canceled) {
+			restored, restoreErr := s.st.RestorePreemptedJob(fin, job.ID, workerID, s.Now(), errAgentPreempted.Error())
+			if restoreErr != nil {
+				s.logf("worker %s: restore preempted agent job %d: %v", workerID, job.ID, restoreErr)
+			} else if restored {
+				s.logf("worker %s: agent job %d (%s %s) preempted; restored=%v", workerID, job.ID, job.Kind, job.FeatureID, restored)
+			} else {
+				s.logf("worker %s: agent job %d (%s %s) lost its lease while being preempted", workerID, job.ID, job.Kind, job.FeatureID)
+			}
+			if restoreErr != nil || !restored {
+				// Do not spend the one-shot bypass after losing ownership of the
+				// displaced job. The requested job remains READY for a normal claim.
+				if priorityID, ok := s.nextPriorityAgent(); ok {
+					s.consumePriorityAgent(priorityID)
+				}
+			}
+			return nil
+		}
 		_ = s.st.RecordBudget(fin, s.project(), "agent", 1)
+		if errors.Is(err, orchestrator.ErrAgentJobRequeued) {
+			s.logf("worker %s: agent job %d (%s %s) returned to READY", workerID, job.ID, job.Kind, job.FeatureID)
+			return nil
+		}
 		if err != nil {
 			s.logf("worker %s: agent job %d (%s %s) failed after %s: %v", workerID, job.ID, job.Kind, job.FeatureID, s.Now().Sub(started).Round(time.Second), err)
 			_ = s.st.CompleteJob(fin, job.ID, err.Error())
@@ -1051,14 +1110,25 @@ func (s *Scheduler) RunScenarioNow(ctx context.Context, scenarioID string, brows
 
 // claimJobByID leases one specific READY job (the store's ClaimJob picks by priority).
 func (s *Scheduler) claimJobByID(ctx context.Context, id int64, worker string) (*model.Job, error) {
+	return s.claimJobByIDWithPriority(ctx, id, worker, false)
+}
+
+// claimUserRequestByID consumes priority 110 as a durable one-shot budget
+// bypass. A requeued retry therefore returns to normal direct-coverage priority.
+func (s *Scheduler) claimUserRequestByID(ctx context.Context, id int64, worker string) (*model.Job, error) {
+	return s.claimJobByIDWithPriority(ctx, id, worker, true)
+}
+
+func (s *Scheduler) claimJobByIDWithPriority(ctx context.Context, id int64, worker string, consumeUserPriority bool) (*model.Job, error) {
 	now := s.Now()
-	res, err := s.st.DB().ExecContext(ctx, `UPDATE jobs SET state='LEASED', lease_owner=?, lease_expires_at=?, attempt=attempt+1, updated_at=? WHERE id=? AND state='READY'`,
-		worker, now.Add(leaseDuration).UnixMilli(), now.UnixMilli(), id)
+	res, err := s.st.DB().ExecContext(ctx, `UPDATE jobs SET state='LEASED', lease_owner=?, lease_expires_at=?, attempt=attempt+1, updated_at=?,
+		priority=CASE WHEN ? AND priority>=? THEN ? ELSE priority END WHERE id=? AND state='READY'`,
+		worker, now.Add(leaseDuration).UnixMilli(), now.UnixMilli(), consumeUserPriority, model.PriorityUserRequest, model.PriorityNewDirectCoverage, id)
 	if err != nil {
 		return nil, err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		return nil, fmt.Errorf("job %d is not READY (already running, finished or missing)", id)
+		return nil, fmt.Errorf("%w: job %d is already running, finished or missing", errJobNotReady, id)
 	}
 	jobs, err := s.st.ListJobs(ctx, s.project(), []model.JobState{model.JobLeased}, 1000)
 	if err != nil {
@@ -1066,6 +1136,8 @@ func (s *Scheduler) claimJobByID(ctx context.Context, id int64, worker string) (
 	}
 	for _, j := range jobs {
 		if j.ID == id {
+			_, _ = s.st.DB().ExecContext(ctx, `INSERT INTO job_attempts(job_id, attempt, worker_id, started_at) VALUES(?,?,?,?)`,
+				j.ID, j.Attempt, worker, now.UnixMilli())
 			return j, nil
 		}
 	}
