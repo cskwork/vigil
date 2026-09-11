@@ -7,7 +7,9 @@
 <title>도움말, QA 현황판</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"></noscript>
 <link rel="stylesheet" href="/ui/theme.css">
 </head>
 <body>
@@ -15,23 +17,40 @@
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
     <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
-    <a href="/">할 일</a>
-    <a href="/results">검증 결과</a>
-    <a href="/scripts">검사 스크립트</a>
-    <a href="/activity">시스템 활동</a>
-    <a href="/help" class="active" aria-current="page">도움말</a>
-    <div class="rail-foot">
+    <ul class="tree">
+      <li><a href="/">할 일 <span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results">검증 결과 <span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
+      <li><a href="/activity">시스템 활동</a></li>
+      <li>
+        <a href="/help" class="active" aria-current="page">도움말</a>
+        <ul class="subtree" aria-label="도움말 화면의 구역">
+          <li><a href="#state">검사 스크립트의 상태</a></li>
+          <li><a href="#oracle">판정 근거</a></li>
+          <li><a href="#outcome">검사 결과</a></li>
+          <li><a href="#repro">재현 판정</a></li>
+          <li><a href="#misc">그 밖의 말</a></li>
+          <li><a href="#tasks">자주 하는 작업</a></li>
+          <li><a href="#keys">단축키</a></li>
+        </ul>
+      </li>
+    </ul>
+    <details class="rail-foot" id="railPrefs" open>
+      <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
       <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
-    </div>
+    </details>
   </nav>
   <div class="content">
     <header class="topbar">
-      <div class="crumbs">QA 현황판 &rsaquo; <b>도움말</b></div>
+      <div class="crumbs">QA 현황판 &rsaquo; 도움말</div>
     </header>
     <main id="main" tabindex="-1">
-      <p class="purpose">화면에 나오는 말이 무슨 뜻인지, 무엇을 하면 되는지 정리했습니다.</p>
+      <div class="page-head">
+        <h1>도움말</h1>
+        <p class="purpose">화면에 나오는 말이 무슨 뜻인지, 무엇을 하면 되는지 정리했습니다. 메뉴의 목차에서 필요한 표로 바로 갈 수 있습니다.</p>
+      </div>
 
       <section class="panel">
         <header><h2>vigil이 하는 일</h2><p>사람이 시키지 않아도 이 네 단계가 계속 돕니다.</p></header>
@@ -47,42 +66,52 @@
 
       <section class="panel">
         <header><h2>용어표</h2><p>왼쪽이 화면에 보이는 말, 오른쪽이 내가 할 일입니다.</p></header>
-        <div class="body">
-          <h3 class="ghead">검사 스크립트의 상태</h3>
+        <div class="body stack-panel">
+          <h3 class="ghead" id="state">검사 스크립트의 상태</h3>
           <table class="gloss"><caption class="sr-only">검사 스크립트 상태 용어</caption>
             <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
             <tbody id="tState"></tbody></table>
 
-          <h3 class="ghead">판정 근거 (오라클)</h3>
+          <h3 class="ghead" id="oracle">판정 근거 (오라클)</h3>
           <p class="sub">무엇을 기준으로 옳고 그름을 정했는지입니다. 근거가 약하면 실패해도 결함이라 단정할 수 없습니다.</p>
           <table class="gloss"><caption class="sr-only">판정 근거 용어</caption>
             <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
             <tbody id="tOracle"></tbody></table>
 
-          <h3 class="ghead">검사 결과</h3>
+          <h3 class="ghead" id="outcome">검사 결과</h3>
           <table class="gloss"><caption class="sr-only">검사 결과 용어</caption>
             <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
             <tbody id="tOutcome"></tbody></table>
 
-          <h3 class="ghead">재현 판정</h3>
+          <h3 class="ghead" id="repro">재현 판정</h3>
           <p class="sub">이슈에 적힌 증상이 실제로 다시 나타났는지에 대한 판정입니다.</p>
           <table class="gloss"><caption class="sr-only">재현 판정 용어</caption>
             <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
             <tbody id="tRepro"></tbody></table>
 
-          <h3 class="ghead">그 밖의 말</h3>
+          <h3 class="ghead" id="misc">그 밖의 말</h3>
           <table class="gloss"><caption class="sr-only">그 밖의 용어</caption>
             <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
             <tbody id="tMisc"></tbody></table>
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="tasks">
         <header><h2>자주 하는 작업</h2><p>화면에서 하는 방법과, 터미널에서 같은 일을 하는 명령입니다.</p></header>
-        <div class="body">
+        <div class="body stack-panel">
           <table class="gloss"><caption class="sr-only">자주 하는 작업과 명령</caption>
             <thead><tr><th scope="col">하고 싶은 일</th><th scope="col">화면에서</th><th scope="col">터미널에서</th></tr></thead>
             <tbody id="tTask"></tbody></table>
+        </div>
+      </section>
+
+      <section class="panel" id="keys">
+        <header><h2>단축키</h2><p>매일 같은 화면을 여는 분을 위한 것입니다. 몰라도 모든 기능을 마우스로 쓸 수 있습니다.</p></header>
+        <div class="body stack-panel">
+          <table class="gloss"><caption class="sr-only">키보드 단축키</caption>
+            <thead><tr><th scope="col">키</th><th scope="col">하는 일</th></tr></thead>
+            <tbody id="tKeys"></tbody></table>
+          <p class="sub">입력창에 글자를 쓰는 동안과 한글을 조합하는 동안에는 단축키가 동작하지 않습니다. 화면 어디서나 <kbd>?</kbd>를 누르면 같은 목록이 열립니다.</p>
         </div>
       </section>
 
@@ -104,8 +133,8 @@
 // The rows reuse the labels and sentences the other pages show (app.js), so the
 // glossary cannot drift from the screens it explains.
 const row = (label, tone, code, mean, todo) =>
-  `<tr><td>${st({ x: [label, tone] }, 'x')}</td><td class="mono">${esc(code)}</td><td>${esc(mean)}</td><td>${esc(todo)}</td></tr>`;
-const fromMap = (map, code, todo) => row((map[code] || [code])[0], (map[code] || [code, 'muted'])[1], code, GLOSS[code] || '', todo);
+  `<tr><td>${st({ x: [label, tone] }, 'x')}</td><td class="mono" data-lab="내부 용어">${esc(code)}</td><td data-lab="무슨 뜻">${esc(mean)}</td><td data-lab="내가 할 일">${esc(todo)}</td></tr>`;
+const fromMap = (map, code, todo) => row((map[code] || [code])[0], (map[code] || [code, 'muted'])[1], code, glossOf(map, code), todo);
 
 $('tState').innerHTML = [
   ['ACTIVE', '없습니다. 실패하면 할 일 화면에 올라옵니다.'],
@@ -156,7 +185,7 @@ $('tMisc').innerHTML = [
   ['발견 사항', 'finding', GLOSS.finding, '내용을 확인하고 처리했으면 닫습니다.'],
   ['공유 자원', 'lock', '같은 계정이나 데이터를 쓰는 검사끼리 겹치지 않게 잡아 두는 표시입니다.', '없습니다.'],
   ['지문', 'fingerprint', '검사 절차의 요약값입니다. 같은 검사가 두 번 만들어지는 것을 막습니다.', '없습니다.'],
-].map(([label, code, mean, todo]) => `<tr><td>${esc(label)}</td><td class="mono">${esc(code)}</td><td>${esc(mean)}</td><td>${esc(todo)}</td></tr>`).join('');
+].map(([label, code, mean, todo]) => `<tr><td>${esc(label)}</td><td class="mono" data-lab="내부 용어">${esc(code)}</td><td data-lab="무슨 뜻">${esc(mean)}</td><td data-lab="내가 할 일">${esc(todo)}</td></tr>`).join('');
 
 $('tTask').innerHTML = [
   ['검사 승인하기', '<a href="/scripts?state=PENDING_APPROVAL">검사 스크립트</a> 화면에서 <b>✔ 승인</b>', 'vigil approve &lt;검사 이름&gt;'],
@@ -165,7 +194,14 @@ $('tTask').innerHTML = [
   ['티켓 증상 재현하기', '없습니다. 터미널에서만 합니다.', 'vigil reproduce &lt;이슈 키&gt;'],
   ['발견 사항 닫기', '없습니다. 터미널에서만 합니다.', 'vigil findings resolve &lt;번호&gt;'],
   ['검사 반려하기', '검사 스크립트 화면에서 <b>✖ 반려</b>', 'vigil reject &lt;검사 이름&gt;'],
-].map(([what, ui, cli]) => `<tr><td class="t">${esc(what)}</td><td>${ui}</td><td><span class="mono">${cli}</span></td></tr>`).join('');
+].map(([what, ui, cli]) => `<tr><td class="t">${esc(what)}</td><td data-lab="화면에서">${ui}</td><td data-lab="터미널에서"><span class="mono">${cli}</span></td></tr>`).join('');
+
+// 단축키 표도 app.js 의 SHORTCUTS 를 그대로 읽어, 실제로 동작하는 키와 어긋날 수
+// 없습니다. 화면의 ? 오버레이와 같은 목록입니다.
+$('tKeys').innerHTML = SHORTCUTS.map(([k, what]) => `<tr><td><kbd>${esc(k)}</kbd></td><td data-lab="하는 일">${esc(what)}</td></tr>`).join('');
+
+// 도움말은 자기 데이터가 없으므로 레일 배지만 가벼운 폴링으로 채웁니다.
+railBadgePoll();
 </script>
 </body>
 </html>

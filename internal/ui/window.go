@@ -31,6 +31,16 @@ func (s *Server) windowState(ctx context.Context) *windowView {
 	return v
 }
 
+// userError writes a Korean sentence a non-developer can act on. The original
+// Go error follows on a second line: the dashboard shows only the first line
+// and keeps the rest behind 개발자 정보.
+func userError(w http.ResponseWriter, status int, msg string, err error) {
+	if err != nil {
+		msg += "\n" + err.Error()
+	}
+	http.Error(w, msg, status)
+}
+
 // scheduleWindow is the only mutating route in this package.
 //
 //	GET    → current window (override or config default)
@@ -52,22 +62,22 @@ func (s *Server) scheduleWindow(w http.ResponseWriter, r *http.Request) {
 		}
 		var in config.ActiveHours
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&in); err != nil {
-			http.Error(w, "본문이 올바른 JSON이 아닙니다: "+err.Error(), http.StatusBadRequest)
+			userError(w, http.StatusBadRequest, "보낸 내용을 읽지 못했습니다. 화면을 새로 고친 뒤 다시 저장해 주세요.", err)
 			return
 		}
 		// Reject loudly here. The scheduler fails open on bad values, so an
 		// invalid window that got persisted would look enabled but do nothing.
 		if err := in.Validate(); err != nil {
-			http.Error(w, "시간대 설정이 올바르지 않습니다: "+err.Error(), http.StatusBadRequest)
+			userError(w, http.StatusBadRequest, "시간대 설정이 올바르지 않습니다. 요일과 시작·끝 시각, 기준 시간대를 확인해 주세요.", err)
 			return
 		}
 		b, err := json.Marshal(in)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			userError(w, http.StatusInternalServerError, "검사 시간대를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.", err)
 			return
 		}
 		if err := s.st.SetState(ctx, config.ActiveHoursStateKey, string(b)); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			userError(w, http.StatusInternalServerError, "검사 시간대를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.", err)
 			return
 		}
 		writeJSON(w, s.windowState(ctx))
@@ -78,13 +88,13 @@ func (s *Server) scheduleWindow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.st.SetState(ctx, config.ActiveHoursStateKey, ""); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			userError(w, http.StatusInternalServerError, "설정 파일 값으로 되돌리지 못했습니다. 잠시 후 다시 시도해 주세요.", err)
 			return
 		}
 		writeJSON(w, s.windowState(ctx))
 
 	default:
 		w.Header().Set("Allow", "GET, POST, DELETE")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		userError(w, http.StatusMethodNotAllowed, "이 주소에서는 지원하지 않는 요청 방식입니다.", nil)
 	}
 }

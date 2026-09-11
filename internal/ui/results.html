@@ -7,7 +7,9 @@
 <title>검증 결과, QA 현황판</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"></noscript>
 <link rel="stylesheet" href="/ui/theme.css">
 </head>
 <body>
@@ -15,34 +17,41 @@
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
     <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
-    <a href="/">할 일</a>
-    <a href="/results" class="active" aria-current="page">검증 결과 <span class="cnt" id="nBad"></span></a>
-    <a href="/scripts">검사 스크립트</a>
-    <a href="/activity">시스템 활동</a>
-    <a href="/help">도움말</a>
-    <div class="rail-foot">
+    <ul class="tree">
+      <li><a href="/">할 일 <span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results" class="active" aria-current="page">검증 결과 <span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
+      <li><a href="/activity">시스템 활동</a></li>
+      <li><a href="/help">도움말</a></li>
+    </ul>
+    <details class="rail-foot" id="railPrefs" open>
+      <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
       <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
-    </div>
+    </details>
   </nav>
   <div class="content">
     <header class="topbar">
-      <div class="crumbs">QA 현황판 &rsaquo; <b>검증 결과</b></div>
+      <div class="crumbs">QA 현황판 &rsaquo; 검증 결과</div>
       <div class="search"><input type="search" id="q" placeholder="검사 항목 검색" aria-label="검사 항목 검색"></div>
       <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
     </header>
     <main id="main" tabindex="-1">
       <div id="fetchErr"></div>
-      <p class="purpose">이번 배포에서 무엇이 확인됐고 무엇이 실패했는지 봅니다.</p>
+      <div class="page-head">
+        <h1>검증 결과</h1>
+        <p class="purpose">이번 배포에서 무엇이 확인됐고 무엇이 실패했는지 봅니다. <a href="/help#outcome">이 화면의 말이 궁금하면 도움말</a></p>
+      </div>
 
       <section aria-label="요약">
+        <h2 class="sr-only">요약</h2>
         <div class="kpis" id="kpis">
-          <article class="kpi north"><h3>서비스 상태</h3><div class="value"><div class="skel" style="width:60%"></div></div><p class="delta">불러오는 중</p></article>
-          <article class="kpi"><h3>이 배포에서 검증</h3><div class="skel"></div></article>
-          <article class="kpi"><h3>아직 검증 안 됨</h3><div class="skel"></div></article>
-          <article class="kpi"><h3>마지막 검증</h3><div class="skel"></div></article>
-          <article class="kpi"><h3>배포 확인 시각</h3><div class="skel"></div></article>
+          <article class="kpi north"><h3>서비스 상태</h3><div class="value"><div class="skel skel-num" style="width:60%"></div></div><p class="delta">불러오는 중</p></article>
+          <article class="kpi"><h3>이 배포에서 검증</h3><div class="value"><div class="skel skel-num"></div></div><p class="delta"><span class="skel skel-line" style="width:70%"></span></p></article>
+          <article class="kpi"><h3>아직 검증 안 됨</h3><div class="value"><div class="skel skel-num"></div></div><p class="delta"><span class="skel skel-line" style="width:80%"></span></p></article>
+          <article class="kpi"><h3>마지막 검증</h3><div class="value"><div class="skel skel-num" style="width:5em"></div></div><p class="delta"><span class="skel skel-line" style="width:50%"></span></p></article>
+          <article class="kpi"><h3>배포 확인 시각</h3><div class="value"><div class="skel skel-num" style="width:5em"></div></div><p class="delta"><span class="skel skel-line" style="width:60%"></span></p></article>
         </div>
       </section>
 
@@ -52,7 +61,7 @@
         <header><h2>이 배포에서 검증한 것</h2><p>결과별로 묶어 보여 줍니다. 묶음 제목을 누르면 펼쳐집니다.</p></header>
         <div class="deploy-head" id="deployHead"><div class="skel" style="width:40%"></div></div>
         <div class="toolbar"><div class="chips" id="chips" role="group" aria-label="결과 묶음 선택"></div><span class="count" id="checkCount" aria-live="polite"></span></div>
-        <div class="body" id="groups"><div class="skel"></div><div class="skel"></div></div>
+        <div class="body stack-panel" id="groups" aria-busy="true"><div class="skel skel-line" style="width:40%"></div><div class="skel skel-line" style="width:32%"></div><div class="skel skel-line" style="width:36%"></div></div>
         <div class="body"><div class="legend" id="legend"></div></div>
       </section>
 
@@ -71,7 +80,7 @@
           <div class="body">
             <table>
               <caption class="sr-only">배포별 검증 요약</caption>
-              <thead><tr><th scope="col">배포</th><th scope="col" class="hide-sm">처음 확인</th><th scope="col">마지막 검증</th><th scope="col" class="num">검사 / 정상</th><th scope="col" class="num hide-sm">항목</th></tr></thead>
+              <thead id="depHead"><tr><th scope="col">배포</th><th scope="col" class="hide-sm">처음 확인</th><th scope="col">마지막 검증</th><th scope="col" class="num" aria-sort="none"><button type="button" class="sortbtn" data-sort="runs">검사 / 정상<span class="sarr" aria-hidden="true">↕</span></button></th><th scope="col" class="num hide-sm">항목</th></tr></thead>
               <tbody id="deployRows"><tr><td colspan="5"><div class="skel"></div></td></tr></tbody>
             </table>
           </div>
@@ -102,26 +111,45 @@ const PAGE_SIZE = 20;
 
 const params = new URLSearchParams(location.search);
 let data = null, marker = params.get('marker') || '', outcome = params.get('outcome') || '',
-  groupFilter = params.get('group') || 'all', openRow = null, tab = 'steps', query = '',
-  shown = {}, openGroups = null;
+  groupFilter = params.get('group') || 'all', openRow = null, tab = 'steps',
+  queryRaw = params.get('q') || '', query = queryRaw.trim().toLowerCase(),
+  sort = parseSort(params.get('sort')), shown = {}, openGroups = null;
+$('q').value = queryRaw;
+// 내보내기가 화면과 같은 것을 담도록, 마지막으로 그린 목록과 조건을 적어 둡니다.
+let shownChecks = null, filterNote = '';
+// 이전 배포와 비교: 기본은 꺼짐이라 처음 오는 사람의 화면은 그대로입니다.
+let compare = false, prevLoading = false, prevErr = null;
+const prevCache = {}; // 배포 표시 -> 그 배포의 검증 결과 (5초 폴링마다 다시 받지 않습니다)
 
-$('q').oninput = (e) => { query = e.target.value.trim().toLowerCase(); shown = {}; render(); };
-$('deployDetails').open = localStorage.getItem('vigil.deploys') === 'open';
-$('deployDetails').addEventListener('toggle', () => localStorage.setItem('vigil.deploys', $('deployDetails').open ? 'open' : 'closed'));
+// 할 일 화면에서 조건을 가지고 넘어오면 KPI 대신 검사 목록이 먼저 보여야 합니다.
+// 폴링 재렌더마다 반복되면 방해가 되므로 최초 1회만 실행합니다.
+let arriveFromTodo = !!(params.get('outcome') || params.get('group'));
 
+$('q').oninput = (e) => { queryRaw = e.target.value; query = queryRaw.trim().toLowerCase(); shown = {}; syncURLSoon(); render(); };
+$('deployDetails').open = store.on('vigil.deploys');
+$('deployDetails').addEventListener('toggle', () => store.setOn('vigil.deploys', $('deployDetails').open));
+
+// 주소에 남기는 것: 배포(marker), 결과 조건(outcome), 묶음(group), 검색어(q),
+// 정렬(sort). 기존 이름은 할 일 화면의 카드가 가리키므로 그대로 둡니다.
 function syncURL() {
   const p = new URLSearchParams();
   if (marker) p.set('marker', marker);
   if (outcome) p.set('outcome', outcome);
   if (groupFilter && groupFilter !== 'all') p.set('group', groupFilter);
+  if (queryRaw.trim()) p.set('q', queryRaw.trim());
+  if (sort) p.set('sort', sortParam(sort));
   history.replaceState(null, '', p.toString() ? '?' + p.toString() : location.pathname);
 }
+const syncURLSoon = debounce(syncURL, 300);
+// 정렬은 불러오는 동안에도 눌러 둘 수 있습니다. 데이터가 없으면 render 가 곧장 돌아옵니다.
+const setSort = (s) => { sort = s; syncURL(); rerender(render); };
+bindSort($('depHead'), () => sort, setSort);
 
 const poll = poller({
   url: () => '/api/verification' + (marker ? '?marker=' + encodeURIComponent(marker) : ''),
   every: 5000,
-  onData: (d, changed) => { data = d; marker = d.marker || ''; setTarget(d.target); if (changed) render(); },
-  tick: { every: 30000, fn: () => { if (data) render(); } },
+  onData: (d, changed) => { data = d; marker = d.marker || ''; setTarget(d.target); if (changed) rerender(render, { focus: false }); },
+  tick: { every: 30000, fn: () => { if (data) rerender(render, { focus: false }); } },
 });
 
 function render() {
@@ -131,7 +159,6 @@ function render() {
   const failing = verified.filter(c => c.outcome === 'APP_FAILURE'), infra = verified.filter(c => ['ENV_FAILURE', 'AUTH_FAILURE', 'DATA_FAILURE'].includes(c.outcome));
   const dep = deps.find(d => d.marker === marker);
   const last = verified.map(c => c.finished_at).sort().reverse()[0];
-  railCount('nBad', failing.length);
   let tone = 'idle', head = '검증 결과 없음', sub = '아직 이 배포에서 실행된 검사가 없습니다.';
   if (incs.length || failing.length) { tone = 'bad'; head = '문제 있음'; sub = `${incs.length || failing.length}건이 약속과 다르게 동작했습니다.`; }
   else if (verified.length && infra.length) { tone = 'warn'; head = '검사 환경 문제'; sub = `${infra.length}건은 서비스가 아니라 검사 환경(네트워크, 로그인) 문제입니다.`; }
@@ -155,9 +182,12 @@ function render() {
   $('issuesBody').innerHTML = findingsNote + (incs.length ? `<div class="agent-head"><b>발견된 문제 ${incs.length}건</b></div><table><caption class="sr-only">미해결 문제 목록</caption><tbody>${incs.map(i => `<tr><td class="t">${i.md_rel ? `<a href="/evidence/${esc(i.md_rel)}" target="_blank" rel="noopener">${esc(incTitle(i.title))}</a>` : esc(incTitle(i.title))}${causeHTML(i, 'inc' + i.id)}</td><td class="fit">${st(INCIDENT, i.kind)}</td><td class="hide-sm fit">${esc(i.created_at)} <span class="sub">(${ago(i.created_at)})</span></td></tr>`).join('')}</tbody></table>`
     : `<div class="empty" style="padding:8px 0"><b>확인된 문제가 없습니다</b>문제가 확인되면 재현 절차와 증거가 여기에 정리됩니다.</div>`);
 
-  $('deployHead').innerHTML = marker ? `<span>${esc(markerLabel(marker))}</span><span class="mk">${esc(marker)}</span>${dep ? `<span class="sub">처음 확인 ${esc(dep.first_seen)} · 마지막 검증 ${esc(dep.last_seen)}</span>` : ''}<div class="actions"><a class="btn" href="/report?marker=${encodeURIComponent(marker)}" target="_blank" rel="noopener">리포트 열기</a><button class="btn primary" id="copyMd">Markdown 복사</button></div>`
-    : '<span class="sub">아직 배포 표시(마커)가 기록된 검사가 없습니다.</span>';
-  const cm = $('copyMd'); if (cm) cm.onclick = copyMarkdown;
+  // 이전 배포는 배포 이력에서 지금 배포 바로 다음 줄입니다(최신이 위).
+  const di = deps.findIndex(d => d.marker === marker);
+  const prevMarker = di >= 0 && deps[di + 1] ? deps[di + 1].marker : null;
+  const prevSet = compare && prevMarker ? prevCache[prevMarker] : null;
+  if (compare && prevMarker && !prevSet && !prevLoading && !prevErr) loadPrev(prevMarker);
+  prevIndex = prevSet ? new Map((prevSet.checks || []).map(c => [c.scenario_id, c])) : null;
 
   // filters: group chips plus an exact-outcome filter that a link can set
   const matches = (c) => (!outcome || (outcome === 'NOT_RUN' ? c.not_verified : c.outcome === outcome))
@@ -167,10 +197,28 @@ function render() {
   for (const c of pool) counts[groupOf(c)] = (counts[groupOf(c)] || 0) + 1;
   $('chips').innerHTML = [['all', '전체'], ...GROUPS.map(g => [g.key, g.label])].map(([k, l]) =>
     `<button type="button" data-f="${k}" aria-pressed="${groupFilter === k}">${esc(l)}<span class="n">${counts[k] || 0}</span></button>`).join('')
-    + (outcome ? `<button type="button" class="clearable" id="clearOutcome">결과: ${esc((OUTCOME[outcome] || [outcome === 'NOT_RUN' ? '아직 실행 안 됨' : outcome])[0])} <span aria-hidden="true">✕</span><span class="sr-only">이 결과 필터 해제</span></button>` : '');
-  $('chips').querySelectorAll('button[data-f]').forEach(b => b.onclick = () => { groupFilter = b.dataset.f; shown = {}; syncURL(); render(); });
-  const co = $('clearOutcome'); if (co) co.onclick = () => { outcome = ''; shown = {}; syncURL(); render(); };
+    + (outcome ? `<button type="button" class="clearable" id="clearOutcome">결과 조건: ${esc((OUTCOME[outcome] || [outcome === 'NOT_RUN' ? '아직 실행 안 됨' : outcome])[0])}, 해제 <span aria-hidden="true">✕</span></button>` : '');
+  $('chips').querySelectorAll('button[data-f]').forEach(b => b.onclick = () => { groupFilter = b.dataset.f; shown = {}; syncURL(); rerender(render); });
+  const co = $('clearOutcome'); if (co) co.onclick = () => { outcome = ''; shown = {}; syncURL(); rerender(render); };
   $('checkCount').textContent = pool.length === checks.length ? `${checks.length}개` : `${pool.length}개 표시 · 전체 ${checks.length}개`;
+
+  // 화면에 실제로 보이는 목록과 그 조건을 적어 둡니다. Markdown 복사는 이것을 씁니다.
+  shownChecks = pool.filter(c => groupFilter === 'all' || groupOf(c) === groupFilter);
+  const notes = [];
+  if (groupFilter !== 'all') notes.push(`결과 묶음 ${(GROUPS.find(g => g.key === groupFilter) || { label: groupFilter }).label}`);
+  if (outcome) notes.push(`결과 ${(OUTCOME[outcome] || [outcome === 'NOT_RUN' ? '아직 실행 안 됨' : outcome])[0]}`);
+  if (query) notes.push(`검색어 "${queryRaw.trim()}"`);
+  filterNote = notes.join(', ');
+
+  const cmpLine = !compare ? ''
+    : !prevMarker ? '<span class="sub">비교할 이전 배포가 없습니다.</span>'
+      : prevErr ? `<span class="sub">이전 배포 결과를 불러오지 못했습니다. ${errHTML(prevErr)}</span>`
+        : !prevIndex ? '<span class="sub">이전 배포 결과를 불러오는 중입니다.</span>'
+          : `<span class="sub">비교 대상: ${esc(markerLabel(prevMarker))}</span>`;
+  $('deployHead').innerHTML = marker ? `<span>${esc(markerLabel(marker))}</span><span class="mk">${esc(marker)}</span>${dep ? `<span class="sub">처음 확인 ${esc(dep.first_seen)} · 마지막 검증 ${esc(dep.last_seen)}</span>` : ''}${cmpLine}<div class="actions"><label class="cmp"><input type="checkbox" id="cmpPrev"${compare ? ' checked' : ''}> 이전 배포와 비교</label><a class="btn" href="/report?marker=${encodeURIComponent(marker)}" target="_blank" rel="noopener">리포트 열기</a><button class="btn primary" id="copyMd">${filterNote ? `표시된 ${shownChecks.length}건 Markdown 복사` : 'Markdown 복사'}</button></div>`
+    : '<span class="sub">아직 배포 표시(마커)가 기록된 검사가 없습니다.</span>';
+  const cm = $('copyMd'); if (cm) cm.onclick = copyMarkdown;
+  const cp = $('cmpPrev'); if (cp) cp.onchange = () => { compare = cp.checked; prevErr = null; rerender(render); };
 
   // groups: collapsed by default, except the first problem group that has rows
   const visible = GROUPS.filter(g => groupFilter === 'all' || groupFilter === g.key);
@@ -179,6 +227,7 @@ function render() {
     openGroups = new Set();
     for (const g of GROUPS) if (groupOpen('results', g.key, firstProblem ? g.key === firstProblem.key : false)) openGroups.add(g.key);
   }
+  $('groups').removeAttribute('aria-busy');
   $('groups').innerHTML = visible.map(g => {
     const rows = pool.filter(c => groupOf(c) === g.key);
     const open = openGroups.has(g.key) && rows.length > 0;
@@ -189,9 +238,9 @@ function render() {
         <span class="caret" aria-hidden="true">${open ? '▾' : '▸'}</span>
         <span class="glabel">${esc(g.label)}</span><span class="gn">${rows.length}건</span>
         <span class="sub">${esc(g.hint)}</span></button></h3>
-      ${open ? `<table class="checks">
+      ${open ? `<table class="checks stack-table">
         <caption class="sr-only">${esc(g.label)} 검사 목록</caption>
-        <thead><tr><th scope="col">검사 항목</th><th scope="col" class="fit">결과</th><th scope="col" class="hide-sm">증거</th><th scope="col" class="hide-sm fit">검증 시각</th><th scope="col" class="fit">증거 상세</th></tr></thead>
+        <thead><tr><th scope="col">검사 항목</th><th scope="col" class="fit">결과</th>${prevIndex ? '<th scope="col" class="fit">이전 배포와 비교</th>' : ''}<th scope="col" class="hide-sm">증거</th><th scope="col" class="hide-sm fit">검증 시각</th><th scope="col" class="fit">증거 상세</th></tr></thead>
         <tbody>${page.map(c => rowHTML(c)).join('')}</tbody></table>
         ${rows.length > page.length ? `<div class="more"><button class="btn" data-more="${g.key}">더 보기 (+${rows.length - page.length})</button></div>` : ''}`
       : (rows.length ? '' : `<div class="empty ghost">${esc(g.label)}에 해당하는 검사가 없습니다.</div>`)}
@@ -204,23 +253,96 @@ function render() {
     const k = b.dataset.g;
     if (openGroups.has(k)) openGroups.delete(k); else openGroups.add(k);
     setGroupOpen('results', k, openGroups.has(k));
-    render();
+    rerender(render);
   });
-  $('groups').querySelectorAll('[data-more]').forEach(b => b.onclick = () => { const k = b.dataset.more; shown[k] = (shown[k] || PAGE_SIZE) + PAGE_SIZE; render(); });
+  $('groups').querySelectorAll('[data-more]').forEach(b => b.onclick = () => { const k = b.dataset.more; shown[k] = (shown[k] || PAGE_SIZE) + PAGE_SIZE; rerender(render); });
   $('groups').querySelectorAll('button[data-detail]').forEach(b => b.onclick = () => {
     openRow = openRow === b.dataset.detail ? null : b.dataset.detail;
-    render();
-    const back = document.querySelector(`button[data-detail="${CSS.escape(openRow || '')}"]`); if (back) back.focus();
+    // 누른 '증거 보기' 버튼은 접기/펼치기 어느 쪽이든 같은 자리에 남으므로
+    // rerender 가 같은 data-detail 로 찾아 포커스를 되돌립니다.
+    rerender(render);
   });
-  document.querySelectorAll('.tabs button').forEach(b => b.onclick = (e) => { e.stopPropagation(); tab = b.dataset.tab; render(); });
+  bindTabs();
   const openCheck = checks.find(c => c.scenario_id === openRow); if (openCheck && $('detail')) loadDetail(openCheck.evidence_rel);
 
   $('legend').innerHTML = `${st(OUTCOME, 'PASS')} 약속대로 동작 &nbsp; ${st(OUTCOME, 'APP_FAILURE')} 약속과 다르게 동작, 개발팀 확인 &nbsp; ${st(OUTCOME, 'SCRIPT_DRIFT')} 화면 구조가 바뀌어 검사 수정 &nbsp; ${st(OUTCOME, 'ENV_FAILURE')} 검사 환경 문제 &nbsp; <a href="/help">용어 설명</a>`;
 
   $('deployCount').textContent = `${deps.length}건`;
-  $('deployRows').innerHTML = deps.length ? deps.map(d => `<tr class="click${d.marker === marker ? ' sel' : ''}" data-marker="${esc(d.marker)}" aria-pressed="${d.marker === marker}"><td><div class="t">${esc(markerLabel(d.marker))}</div><div class="sub mono">${esc(d.marker)}</div></td><td class="hide-sm">${esc(d.first_seen)}</td><td>${esc(d.last_seen)}<div class="sub">${ago(d.last_seen)}</div></td><td class="num">${d.runs} / ${d.passes}</td><td class="num hide-sm">${d.scenarios}</td></tr>`).join('')
+  // 배포 이력은 숫자 열 하나만 정렬할 수 있습니다. 누르기 전에는 최신 배포가 위인
+  // 지금 순서 그대로입니다.
+  $('depHead').innerHTML = `<tr><th scope="col">배포</th><th scope="col" class="hide-sm">처음 확인</th><th scope="col">마지막 검증</th>${sortTh(sort, 'runs', '검사 / 정상', 'num')}<th scope="col" class="num hide-sm">항목</th></tr>`;
+  bindSort($('depHead'), () => sort, setSort);
+  const depRows = sortRows(deps, sort, { runs: (d) => d.runs || 0 });
+  $('deployRows').innerHTML = depRows.length ? depRows.map(d => `<tr class="click${d.marker === marker ? ' sel' : ''}" data-marker="${esc(d.marker)}" aria-pressed="${d.marker === marker}"><td><div class="t">${esc(markerLabel(d.marker))}</div><div class="sub mono">${esc(d.marker)}</div></td><td class="hide-sm">${esc(d.first_seen)}</td><td>${esc(d.last_seen)}<div class="sub">${ago(d.last_seen)}</div></td><td class="num">${d.runs} / ${d.passes}</td><td class="num hide-sm">${d.scenarios}</td></tr>`).join('')
     : `<tr><td colspan="5" class="empty"><b>배포 이력이 없습니다</b>배포 표시(assets/index.js?v=)가 확인되면 기록됩니다.</td></tr>`;
-  bindRows('#deployRows tr.click', tr => { marker = tr.dataset.marker; openRow = null; syncURL(); poll.refresh(); });
+  // 배포를 고르면 서버에서 그 배포의 결과를 다시 받아 오고, 그 응답이 목록을 통째로
+  // 다시 그립니다. 폴링이 부른 재렌더와 같은 경로라 포커스가 복원되지 않으므로,
+  // 여기서 고른 줄로 직접 돌려 놓습니다.
+  bindRows('#deployRows tr.click', async (tr) => {
+    marker = tr.dataset.marker; openRow = null; syncURL();
+    await poll.refresh();
+    const back = document.querySelector(`#deployRows tr[data-marker="${CSS.escape(marker)}"]`);
+    if (back) back.focus();
+  });
+
+  if (arriveFromTodo) {
+    arriveFromTodo = false;
+    const h = $('verify').querySelector('h2');
+    if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); h.scrollIntoView({ block: 'start' }); }
+  }
+}
+
+const TABS = [['steps', '단계'], ['shots', '화면 캡처'], ['net', '서버 응답'], ['console', '콘솔']];
+// 선택을 옮기면 재렌더가 일어나 버튼이 다시 만들어지므로, 옮긴 탭으로 포커스를
+// 되돌립니다(rerender 의 data-tab 복원과 같은 자리).
+function pickTab(k) {
+  tab = k;
+  rerender(render);
+  const el = document.querySelector(`.tabs button[data-tab="${k}"]`);
+  if (el) el.focus();
+}
+function bindTabs() {
+  const tabs = [...document.querySelectorAll('.tabs button[role="tab"]')];
+  tabs.forEach((b, i) => {
+    b.onclick = (e) => { e.stopPropagation(); pickTab(b.dataset.tab); };
+    b.onkeydown = (e) => {
+      if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+      let to = null;
+      if (e.key === 'ArrowRight') to = (i + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') to = (i - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'Home') to = 0;
+      else if (e.key === 'End') to = tabs.length - 1;
+      if (to === null) return;
+      e.preventDefault(); e.stopPropagation();
+      pickTab(tabs[to].dataset.tab);
+    };
+  });
+}
+
+// ---- 이전 배포와의 차이: 색이 아니라 라벨과 모양으로 말합니다 ----------------
+// 원 = 복구됨, 사각 = 새로 실패, 선 = 그대로 / 이전에 실행 안 됨.
+let prevIndex = null;
+const DIFF = { new_fail: ['새로 실패', 'bad'], fixed: ['복구됨', 'ok'], same: ['그대로', 'muted'], unseen: ['이전에 실행 안 됨', 'muted'] };
+const okOutcome = (c) => c.outcome === 'PASS' || c.outcome === 'QA_FLAKE';
+function diffCell(c) {
+  // 이번 배포에서 실행되지 않은 항목은 견줄 것이 없으므로 결과 열과 같게 비워 둡니다.
+  if (c.not_verified) return '<span class="sub">-</span>';
+  const p = prevIndex.get(c.scenario_id);
+  if (!p || p.not_verified) return st(DIFF, 'unseen');
+  if (okOutcome(p) && !okOutcome(c)) return st(DIFF, 'new_fail');
+  if (!okOutcome(p) && okOutcome(c)) return st(DIFF, 'fixed');
+  return st(DIFF, 'same');
+}
+// 이전 배포 결과는 배포 표시 단위로 캐시해, 5초 폴링마다 다시 부르지 않습니다.
+async function loadPrev(m) {
+  prevLoading = true;
+  try {
+    const r = await fetch('/api/verification?marker=' + encodeURIComponent(m), { cache: 'no-cache' });
+    if (!r.ok) throw await httpFail(r, '이전 배포 결과를 불러오지 못했습니다.');
+    prevCache[m] = await r.json();
+    prevErr = null;
+  } catch (e) { prevErr = e; }
+  finally { prevLoading = false; rerender(render, { focus: false }); }
 }
 
 function rowHTML(c) {
@@ -228,22 +350,34 @@ function rowHTML(c) {
   const evi = ev ? `<p class="sub cause-evi">${ev}</p>` : '';
   const why = !c.not_verified ? causeHTML(c, c.scenario_id, evi) : '';
   const open = openRow === c.scenario_id;
+  const cols = prevIndex ? 6 : 5;
   const row = `<tr class="${open ? 'sel' : ''}"><td class="title"><div class="t">${esc(c.title || c.scenario_id)}</div><div class="sub">${esc(CLASS[c.class] || c.class)}${c.browser ? ` · ${esc(BROWSER[c.browser] || c.browser)}` : ''} ${envBadge(c.environment)} ${dev(c.scenario_id + (c.version ? ' v' + c.version : '') + (c.run_id ? ' run#' + c.run_id : ''))}</div>${why}</td>
     <td class="st-cell">${c.not_verified ? '<span class="sub">-</span>' : stTip(OUTCOME, c.outcome)}</td>
-    <td class="hide-sm">${ev}</td>
-    <td class="hide-sm when">${c.finished_at ? when(c.finished_at) + `<div class="sub">${ago(c.finished_at)}</div>` : ''}</td>
+    ${prevIndex ? `<td class="st-cell" data-lab="이전 배포와 비교">${diffCell(c)}</td>` : ''}
+    <td class="hide-sm" data-lab="증거">${ev}</td>
+    <td class="hide-sm when" data-lab="검증 시각">${c.finished_at ? when(c.finished_at) + `<div class="sub">${ago(c.finished_at)}</div>` : ''}</td>
     <td class="fit">${c.not_verified ? '' : `<button class="btn" data-detail="${esc(c.scenario_id)}" aria-expanded="${open}">${open ? '접기' : '증거 보기'}</button>`}</td></tr>`;
-  const det = open ? `<tr class="detail-row"><td colspan="5"><div class="tabs" role="tablist">${[['steps', '단계'], ['shots', '화면 캡처'], ['net', '서버 응답'], ['console', '콘솔']].map(([k, l]) => `<button role="tab" aria-selected="${tab === k}" data-tab="${k}">${l}</button>`).join('')}</div><div id="detail"><div class="skel"></div></div><p class="sub dev">${c.environment ? `환경: ${esc(c.environment)} · ` : ''}증적: <a href="/evidence/${esc(c.evidence_rel)}/" target="_blank" rel="noopener">${esc(c.evidence_rel)}</a></p></td></tr>` : '';
+  // 증거 탭: 탭 하나만 Tab 순서에 들어가고, 좌우 화살표로 옮깁니다. 내용 영역은
+  // tabpanel 로 선언해 어느 탭의 내용인지 스크린리더가 말할 수 있게 합니다.
+  const det = open ? `<tr class="detail-row"><td colspan="${cols}"><div class="tabs" role="tablist" aria-label="증거 종류">${TABS.map(([k, l]) => `<button role="tab" id="tab-${k}" aria-controls="detail" aria-selected="${tab === k}" tabindex="${tab === k ? 0 : -1}" data-tab="${k}">${l}</button>`).join('')}</div><div id="detail" role="tabpanel" aria-labelledby="tab-${tab}"><div class="skel"></div></div><p class="sub dev">${c.environment ? `환경: ${esc(c.environment)} · ` : ''}증적: <a href="/evidence/${esc(c.evidence_rel)}/" target="_blank" rel="noopener">${esc(c.evidence_rel)}</a></p></td></tr>` : '';
   return row + det;
 }
 
 // ---- manual requests (own poll; they change on a different clock) ----------
-let reqData = null, reqOpen = null;
-const reqPoll = poller({ url: '/api/requests', every: 10000, onData: (d, changed) => { reqData = d; if (changed) renderRequests(); }, onError: () => {} });
+// 이 폴러는 주 데이터(/api/verification)가 아니므로 owner:false 로 두어 상단의
+// 실시간 표시와 연결 오류 자리를 건드리지 않습니다. 요청 목록만 실패했을 때는
+// 이 패널 안에서만 그 사실을 말합니다.
+let reqData = null, reqOpen = null, reqErr = false;
+const reqPoll = poller({
+  url: '/api/requests', every: 10000, owner: false,
+  onData: (d, changed) => { const had = reqErr; reqErr = false; reqData = d; if (changed || had) rerender(renderRequests, { focus: false }); },
+  onError: () => { if (!reqErr) { reqErr = true; rerender(renderRequests, { focus: false }); } },
+});
 function renderRequests() {
   const list = (reqData && reqData.requests) || [];
-  const sec = $('requests'); sec.hidden = !list.length; if (!list.length) return;
-  $('requestsBody').innerHTML = list.map(q => `
+  const sec = $('requests'); sec.hidden = !list.length && !reqErr; if (!list.length && !reqErr) return;
+  const errLine = reqErr ? '<div class="errbox"><span>요청 목록을 불러오지 못했습니다. 이 화면의 검증 결과는 그대로입니다.</span><button class="btn" id="reqRetry">다시 시도</button></div>' : '';
+  $('requestsBody').innerHTML = errLine + list.map(q => `
     <div class="request">
       <div class="agent-head"><b>${esc(q.summary || q.feature_id)}</b>${st(REQ_STATUS, q.status)}${q.decision ? st(DECISION, q.decision) : ''}<span class="sub">${esc(q.requested_at)}${q.duration ? ` · ${esc(q.duration)}` : ''}${q.tool_calls ? ` · 브라우저 조작 ${q.tool_calls}회` : ''}${q.candidates ? ` · 제안 스크립트 ${q.candidates}개` : ''}</span><button class="btn" data-req="${esc(q.feature_id)}" aria-expanded="${reqOpen === q.feature_id}">${reqOpen === q.feature_id ? '접기' : '결과 보기'}</button></div>
       ${reqOpen === q.feature_id ? `
@@ -255,14 +389,15 @@ function renderRequests() {
         <p class="sub dev">증적 폴더: <a href="/evidence/${esc(q.dir)}/" target="_blank" rel="noopener">${esc(q.dir)}</a></p>` : ''}
     </div>`).join('');
   keepDetails($('requestsBody'));
-  document.querySelectorAll('#requestsBody button[data-req]').forEach(b => b.onclick = () => { reqOpen = reqOpen === b.dataset.req ? null : b.dataset.req; renderRequests(); });
+  const rr = $('reqRetry'); if (rr) rr.onclick = () => reqPoll.refresh();
+  document.querySelectorAll('#requestsBody button[data-req]').forEach(b => b.onclick = () => { reqOpen = reqOpen === b.dataset.req ? null : b.dataset.req; rerender(renderRequests); });
 }
 
 const detailCache = {};
 async function loadDetail(dir) {
   const el = $('detail'); if (!el) return;
   try {
-    if (!detailCache[dir]) { const r = await fetch('/api/run/detail?dir=' + encodeURIComponent(dir)); if (!r.ok) throw new Error('HTTP ' + r.status); detailCache[dir] = await r.json(); }
+    if (!detailCache[dir]) { const r = await fetch('/api/run/detail?dir=' + encodeURIComponent(dir)); if (!r.ok) throw await httpFail(r, '증거를 불러오지 못했습니다.'); detailCache[dir] = await r.json(); }
     const d = detailCache[dir];
     if (tab === 'steps') {
       el.innerHTML = stepsHTML((d.steps && d.steps.steps) || []);
@@ -276,16 +411,20 @@ async function loadDetail(dir) {
       const rows = d.console || [];
       el.innerHTML = rows.length ? `<table><thead><tr><th class="fit">수준</th><th>메시지</th></tr></thead><tbody>${rows.map(c => `<tr><td class="fit">${st({ error: ['오류', 'bad'], exception: ['예외', 'bad'], warn: ['경고', 'warn'], warning: ['경고', 'warn'], log: ['로그', 'muted'] }, c.level)}</td><td class="mono console-text">${esc(c.text)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty"><b>브라우저 콘솔 오류가 없습니다</b></div>';
     }
-  } catch (e) { el.innerHTML = `<div class="errbox"><span>증거를 불러오지 못했습니다 (${esc(e.message)})</span><button class="btn" id="detailRetry">다시 시도</button></div>`; $('detailRetry').onclick = () => { delete detailCache[dir]; render(); }; }
+  } catch (e) { el.innerHTML = `<div class="errbox"><span>${errHTML(e)}</span><button class="btn" id="detailRetry">다시 시도</button></div>`; $('detailRetry').onclick = () => { delete detailCache[dir]; render(); }; }
 }
 
+// 화면이 좁혀져 있으면 좁혀진 목록만 담고, 무엇으로 좁혔는지 머리말에 적습니다.
+// 조건이 없을 때의 출력은 지금까지와 같습니다.
 function toMarkdown() {
-  const o = data, checks = o.checks || [], dep = (o.deployments || []).find(d => d.marker === marker);
+  const o = data, all = o.checks || [], dep = (o.deployments || []).find(d => d.marker === marker);
+  const checks = filterNote && shownChecks ? shownChecks : all;
   const L = [];
   L.push(`# QA 검증 결과: ${o.target}`);
   L.push(`- 배포 표시: \`${marker}\`${dep ? ` (처음 확인 ${dep.first_seen}, 마지막 검증 ${dep.last_seen})` : ''}`);
-  const v = checks.filter(c => !c.not_verified), p = v.filter(c => c.outcome === 'PASS' || c.outcome === 'QA_FLAKE');
-  L.push(`- 결과: ${p.length}/${v.length} 정상, 미실행 ${checks.length - v.length}, 미해결 문제 ${(o.incidents || []).length}건, 데이터 발견 사항 ${o.open_findings || 0}건`);
+  const v = all.filter(c => !c.not_verified), p = v.filter(c => c.outcome === 'PASS' || c.outcome === 'QA_FLAKE');
+  L.push(`- 결과: ${p.length}/${v.length} 정상, 미실행 ${all.length - v.length}, 미해결 문제 ${(o.incidents || []).length}건, 데이터 발견 사항 ${o.open_findings || 0}건`);
+  if (filterNote) L.push(`- 적용한 조건: ${filterNote} (표시된 ${checks.length}건만 담았습니다. 전체는 ${all.length}건입니다.)`);
   L.push(`- 생성: ${new Date().toLocaleString('ko-KR')}`, '');
   L.push('| 검사 항목 | 결과 | 검증 시각 | 증거 |', '|---|---|---|---|');
   for (const c of checks) {
@@ -301,6 +440,8 @@ async function copyMarkdown() {
 }
 
 poll.start();
+// 레일 배지는 이 화면의 집계가 아니라 사람이 손대야 할 건수입니다.
+railBadgePoll();
 reqPoll.start();
 </script>
 </body>
