@@ -14,12 +14,12 @@ func (s *Server) runSteps(w http.ResponseWriter, r *http.Request) {
 	rel := r.URL.Query().Get("dir")
 	dir, ok := s.safeJoin(rel)
 	if !ok {
-		http.Error(w, "bad dir", http.StatusBadRequest)
+		userError(w, http.StatusBadRequest, "증거 폴더 경로가 올바르지 않습니다. 목록에서 다시 열어 주세요.", nil)
 		return
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "steps.json"))
 	if err != nil {
-		http.Error(w, "steps.json not found", http.StatusNotFound)
+		userError(w, http.StatusNotFound, "이 실행의 단계 기록이 남아 있지 않습니다. 증거 폴더가 정리됐을 수 있습니다.", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -103,7 +103,7 @@ func screenshotRel(has bool, rel string) string {
 func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
 	dir, ok := s.safeJoin(r.URL.Query().Get("dir"))
 	if !ok {
-		http.Error(w, "bad dir", http.StatusBadRequest)
+		userError(w, http.StatusBadRequest, "증거 폴더 경로가 올바르지 않습니다. 목록에서 다시 열어 주세요.", nil)
 		return
 	}
 	out := map[string]any{}

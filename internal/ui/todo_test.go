@@ -221,8 +221,14 @@ func TestScriptListCannotOutgrowItsCard(t *testing.T) {
 	if !strings.Contains(page, `class="split single" id="split"`) {
 		t.Error("the scripts page does not start with a full-width list")
 	}
-	if !strings.Contains(page, `id="detail" aria-live="polite" hidden`) {
+	// The panel stays hidden until a row is selected, and it is a separate
+	// section from the list. It is no longer an aria-live region: a poll used to
+	// make a screen reader read the whole detail again (WS2, aria-live-overreach).
+	if !strings.Contains(page, `aria-label="스크립트 상세" id="detail" hidden`) {
 		t.Error("the detail panel must stay hidden until a script is selected")
+	}
+	if strings.Contains(page, `id="detail" aria-live`) {
+		t.Error("the detail panel must not be a live region; opening it moves focus instead")
 	}
 	if !strings.Contains(page, `class="panel list-panel"`) {
 		t.Error("the list panel is not a query container, so rows cannot stack when it is narrow")

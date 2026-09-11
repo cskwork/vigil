@@ -7,16 +7,20 @@
 <title>시스템 활동, QA 현황판</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"></noscript>
 <link rel="stylesheet" href="/ui/theme.css">
 <style>
   .win-row { display:flex; flex-wrap:wrap; gap:14px 18px; align-items:flex-end; margin-top:12px; }
   .win-row > label { display:flex; flex-direction:column; gap:4px; font-size:var(--fs-sm); color:var(--muted); }
-  .win-row input[type=time], .win-row input[type=text] { border:1px solid var(--line-strong); background:var(--surface); border-radius:8px; padding:6px 10px; }
+  .win-row input[type=time], .win-row input[type=text] { border:1px solid var(--control-line); background:var(--surface); border-radius:8px; padding:6px 10px; }
+  .win-field { border:0; padding:0; margin:0; min-width:0; }
+  .win-field legend { padding:0; margin-bottom:4px; font-size:var(--fs-sm); color:var(--muted); }
   .win-days { display:flex; gap:6px; }
-  .win-days span { position:relative; }
+  .win-days label { position:relative; display:block; cursor:pointer; }
   .win-days input { position:absolute; opacity:0; inset:0; margin:0; cursor:pointer; }
-  .win-days b { display:block; min-width:36px; text-align:center; padding:6px 0; border:1px solid var(--line-strong); border-radius:8px; font-weight:500; }
+  .win-days b { display:block; min-width:36px; text-align:center; padding:6px 0; border:1px solid var(--control-line); border-radius:8px; font-weight:500; }
   .win-days input:checked + b { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:600; }
   .win-days input:focus-visible + b { outline:2px solid var(--accent); outline-offset:2px; }
   .win-actions { display:flex; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap; }
@@ -29,25 +33,32 @@
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
     <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
-    <a href="/" class="page">할 일</a>
-    <a href="/results" class="page">검증 결과</a>
-    <a href="/scripts" class="page">검사 스크립트</a>
-    <a href="/help" class="page">도움말</a>
-    <div class="rail-sep"></div>
-    <a href="#overview" class="active">개요</a>
-    <a href="#now">진행 상황 <span class="cnt" id="nNow"></span></a>
-    <a href="#ai">AI 도우미</a>
-    <a href="#window">검사 시간대</a>
-    <a href="#supervisor">커버리지 확장</a>
-    <a href="#checks">검사 항목 <span class="cnt" id="nChecks"></span></a>
-    <a href="#issues">발견된 문제 <span class="cnt" id="nIssues"></span></a>
-    <a href="#history">검사 기록</a>
-    <a href="#deploys">배포 변경 <span class="cnt" id="nDeploys"></span></a>
-    <div class="rail-foot">
+    <ul class="tree">
+      <li><a href="/">할 일 <span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results">검증 결과 <span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
+      <li>
+        <a href="/activity" class="active" aria-current="page">시스템 활동</a>
+        <ul class="subtree" aria-label="시스템 활동 화면의 구역">
+          <li><a href="#overview" class="active" aria-current="location">개요</a></li>
+          <li><a href="#now">진행 상황 <span class="cnt" id="nNow"></span></a></li>
+          <li><a href="#ai">AI 도우미</a></li>
+          <li><a href="#window">검사 시간대</a></li>
+          <li><a href="#supervisor">커버리지 확장</a></li>
+          <li><a href="#checks">검사 항목 <span class="cnt" id="nChecks"></span></a></li>
+          <li><a href="#issues">발견된 문제 <span class="cnt" id="nIssues"></span></a></li>
+          <li><a href="#history">검사 기록</a></li>
+          <li><a href="#deploys">배포 변경 <span class="cnt" id="nDeploys"></span></a></li>
+        </ul>
+      </li>
+      <li><a href="/help">도움말</a></li>
+    </ul>
+    <details class="rail-foot" id="railPrefs" open>
+      <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
       <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
-    </div>
+    </details>
   </nav>
   <div class="content">
     <header class="topbar">
@@ -56,13 +67,17 @@
       <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
     </header>
     <main id="main" tabindex="-1">
+      <div class="page-head"><h1>시스템 활동</h1>
+        <p class="purpose">지금 무엇이 돌고 있고, 무엇이 예정되어 있는지 봅니다. <a href="/help#misc">이 화면의 말이 궁금하면 도움말</a></p>
+      </div>
       <section id="overview" aria-label="개요">
+        <h2 class="sr-only">요약</h2>
         <div class="kpis" id="kpis">
-          <article class="kpi north"><h3>서비스 상태</h3><div class="value"><div class="skel" style="width:60%"></div></div><p class="delta">불러오는 중</p></article>
-          <article class="kpi"><h3>지난 1시간 성공률</h3><div class="skel"></div></article>
-          <article class="kpi"><h3>사람 확인 필요</h3><div class="skel"></div></article>
-          <article class="kpi"><h3>진행 중 / 대기</h3><div class="skel"></div></article>
-          <article class="kpi"><h3>AI 도우미 사용</h3><div class="skel"></div></article>
+          <article class="kpi north"><h3>서비스 상태</h3><div class="value"><div class="skel skel-num" style="width:60%"></div></div><p class="delta">불러오는 중</p></article>
+          <article class="kpi"><h3>지난 1시간 성공률</h3><div class="value"><div class="skel skel-num"></div></div><p class="delta"><span class="skel skel-line" style="width:70%"></span></p></article>
+          <article class="kpi"><h3>사람 확인 필요</h3><div class="value"><div class="skel skel-num"></div></div><p class="delta"><span class="skel skel-line" style="width:60%"></span></p></article>
+          <article class="kpi"><h3>진행 중 / 대기</h3><div class="value"><div class="skel skel-num" style="width:4.5em"></div></div><p class="delta"><span class="skel skel-line" style="width:65%"></span></p></article>
+          <article class="kpi"><h3>AI 도우미 사용</h3><div class="value"><div class="skel skel-num" style="width:4.5em"></div></div><p class="delta"><span class="skel skel-line" style="width:55%"></span></p></article>
         </div>
         <div id="fetchErr"></div>
       </section>
@@ -86,17 +101,18 @@
             <label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="winEnabled"><span>시간대 제한 사용</span></label>
           </div>
           <div class="win-row">
-            <label>요일
+            <fieldset class="win-field">
+              <legend>요일</legend>
               <div class="win-days" id="winDays">
-                <span><input type="checkbox" id="wd1" value="1"><b>월</b></span>
-                <span><input type="checkbox" id="wd2" value="2"><b>화</b></span>
-                <span><input type="checkbox" id="wd3" value="3"><b>수</b></span>
-                <span><input type="checkbox" id="wd4" value="4"><b>목</b></span>
-                <span><input type="checkbox" id="wd5" value="5"><b>금</b></span>
-                <span><input type="checkbox" id="wd6" value="6"><b>토</b></span>
-                <span><input type="checkbox" id="wd0" value="0"><b>일</b></span>
+                <label><input type="checkbox" id="wd1" value="1"><b>월</b></label>
+                <label><input type="checkbox" id="wd2" value="2"><b>화</b></label>
+                <label><input type="checkbox" id="wd3" value="3"><b>수</b></label>
+                <label><input type="checkbox" id="wd4" value="4"><b>목</b></label>
+                <label><input type="checkbox" id="wd5" value="5"><b>금</b></label>
+                <label><input type="checkbox" id="wd6" value="6"><b>토</b></label>
+                <label><input type="checkbox" id="wd0" value="0"><b>일</b></label>
               </div>
-            </label>
+            </fieldset>
             <label>시작 <input type="time" id="winFrom" step="300"></label>
             <label>끝 <input type="time" id="winTo" step="300"></label>
             <label class="win-tz">기준 시간대 <input type="text" id="winTz" placeholder="Asia/Seoul" size="14"></label>
@@ -106,6 +122,7 @@
             <button class="btn" id="winReset">설정 파일 값으로 되돌리기</button>
             <span class="sub" id="winSource"></span>
           </div>
+          <div class="sub receipt" id="winReceipt" role="status"></div>
           <p class="sub">끝 시각을 시작보다 이르게 두면 자정을 넘기는 시간대가 됩니다 (예: 22:00 → 06:00).</p>
         </div>
       </section>
@@ -117,11 +134,14 @@
 
       <section id="checks" class="panel" aria-label="검사 항목">
         <header><h2>검사 항목</h2><p>서비스가 이렇게 동작해야 한다는 약속. 정해진 주기로 반복 확인합니다</p></header>
-        <div class="body">
-          <table>
-            <thead><tr><th>검사 항목</th><th class="fit">최근 결과</th><th class="hide-sm fit">다음 검사</th><th class="num hide-sm">검사 / 정상</th><th class="hide-sm fit">중요도</th></tr></thead>
-            <tbody id="scenarios"><tr><td colspan="5"><div class="skel"></div><div class="skel"></div></td></tr></tbody>
+        <div class="body stack-panel">
+          <table class="stack-table">
+            <thead id="scHead"><tr><th scope="col">검사 항목</th><th scope="col" class="fit">최근 결과</th><th scope="col" class="hide-sm fit" aria-sort="none"><button type="button" class="sortbtn" data-sort="next">다음 검사<span class="sarr" aria-hidden="true">↕</span></button></th><th scope="col" class="num hide-sm" aria-sort="none"><button type="button" class="sortbtn" data-sort="runs">검사 / 정상<span class="sarr" aria-hidden="true">↕</span></button></th><th scope="col" class="hide-sm fit">중요도</th></tr></thead>
+            <tbody id="scenarios" aria-busy="true">
+              <tr><td><div class="skel skel-line" style="width:70%"></div></td><td class="fit"><div class="skel skel-chip"></div></td><td class="hide-sm fit" data-lab="다음 검사"><div class="skel skel-line" style="width:5em"></div></td><td class="num hide-sm" data-lab="검사 / 정상"><div class="skel skel-line" style="width:3em"></div></td><td class="hide-sm fit" data-lab="중요도"><div class="skel skel-chip"></div></td></tr><tr><td><div class="skel skel-line" style="width:56%"></div></td><td class="fit"><div class="skel skel-chip"></div></td><td class="hide-sm fit" data-lab="다음 검사"><div class="skel skel-line" style="width:5em"></div></td><td class="num hide-sm" data-lab="검사 / 정상"><div class="skel skel-line" style="width:3em"></div></td><td class="hide-sm fit" data-lab="중요도"><div class="skel skel-chip"></div></td></tr><tr><td><div class="skel skel-line" style="width:64%"></div></td><td class="fit"><div class="skel skel-chip"></div></td><td class="hide-sm fit" data-lab="다음 검사"><div class="skel skel-line" style="width:5em"></div></td><td class="num hide-sm" data-lab="검사 / 정상"><div class="skel skel-line" style="width:3em"></div></td><td class="hide-sm fit" data-lab="중요도"><div class="skel skel-chip"></div></td></tr>
+            </tbody>
           </table>
+          <div class="more" id="moreChecks"></div>
           <div class="legend" id="legend"></div>
         </div>
       </section>
@@ -136,7 +156,9 @@
         <div class="body">
           <table>
             <thead><tr><th class="fit">시각</th><th>검사 항목</th><th class="fit">결과</th><th class="num hide-sm">소요</th></tr></thead>
-            <tbody id="runs"><tr><td colspan="4"><div class="skel"></div><div class="skel"></div></td></tr></tbody>
+            <tbody id="runs" aria-busy="true">
+              <tr><td class="fit"><div class="skel skel-line" style="width:5em"></div></td><td><div class="skel skel-line" style="width:66%"></div></td><td class="fit"><div class="skel skel-chip"></div></td><td class="num hide-sm"><div class="skel skel-line" style="width:3em"></div></td></tr><tr><td class="fit"><div class="skel skel-line" style="width:5em"></div></td><td><div class="skel skel-line" style="width:52%"></div></td><td class="fit"><div class="skel skel-chip"></div></td><td class="num hide-sm"><div class="skel skel-line" style="width:3em"></div></td></tr><tr><td class="fit"><div class="skel skel-line" style="width:5em"></div></td><td><div class="skel skel-line" style="width:60%"></div></td><td class="fit"><div class="skel skel-chip"></div></td><td class="num hide-sm"><div class="skel skel-line" style="width:3em"></div></td></tr>
+            </tbody>
           </table>
           <div class="more" id="more"></div>
         </div>
@@ -147,7 +169,9 @@
         <div class="body">
           <table>
             <thead><tr><th>변경</th><th class="fit">배포 확인</th><th class="hide-sm fit">출시 시각</th></tr></thead>
-            <tbody id="features"><tr><td colspan="3"><div class="skel"></div></td></tr></tbody>
+            <tbody id="features" aria-busy="true">
+              <tr><td><div class="skel skel-line" style="width:62%"></div></td><td class="fit"><div class="skel skel-chip"></div></td><td class="hide-sm fit"><div class="skel skel-line" style="width:5em"></div></td></tr><tr><td><div class="skel skel-line" style="width:48%"></div></td><td class="fit"><div class="skel skel-chip"></div></td><td class="hide-sm fit"><div class="skel skel-line" style="width:5em"></div></td></tr>
+            </tbody>
           </table>
         </div>
       </section>
@@ -158,8 +182,28 @@
 <script src="/ui/app.js"></script>
 <script>
 const open = new Set();
-let showAll = false, query = '';
-$('q').oninput = (e) => { query = e.target.value.trim().toLowerCase(); render(); };
+// 다른 화면과 같은 누적 페이징입니다. 목록이 커져도 처음에는 20행만 그리고,
+// AI 도구 호출은 최근 50건만 그립니다. 검색어가 바뀌면 세 카운터를 되돌립니다.
+const PAGE_SIZE = 20, CALL_PAGE = 50;
+const params = new URLSearchParams(location.search);
+let shownRuns = PAGE_SIZE, shownScs = PAGE_SIZE, shownCalls = CALL_PAGE,
+  queryRaw = params.get('q') || '', query = queryRaw.trim().toLowerCase(),
+  sort = parseSort(params.get('sort'));
+$('q').value = queryRaw;
+$('q').oninput = (e) => { queryRaw = e.target.value; query = queryRaw.trim().toLowerCase(); shownRuns = PAGE_SIZE; shownScs = PAGE_SIZE; syncURLSoon(); render(); };
+
+// 다른 두 화면과 같은 주소 계약입니다. 검색어는 q, 정렬은 sort 에 남깁니다.
+// 주소가 그대로면 새 탭에서 열어도 같은 화면이 재현됩니다.
+function syncURL() {
+  const p = new URLSearchParams();
+  if (queryRaw.trim()) p.set('q', queryRaw.trim());
+  if (sort) p.set('sort', sortParam(sort));
+  history.replaceState(null, '', (p.toString() ? '?' + p.toString() : location.pathname) + location.hash);
+}
+const syncURLSoon = debounce(syncURL, 300);
+// 정렬은 불러오는 동안에도 눌러 둘 수 있습니다. 데이터가 없으면 render 가 곧장 돌아옵니다.
+const setSort = (s) => { sort = s; shownScs = PAGE_SIZE; syncURL(); rerender(render); };
+bindSort($('scHead'), () => sort, setSort);
 
 // nav highlight via IntersectionObserver (no scroll listener)
 const links = [...document.querySelectorAll('.rail a[href^="#"]')];
@@ -168,7 +212,11 @@ const io = new IntersectionObserver((entries) => {
   entries.forEach(e => visible.set(e.target.id, e.isIntersecting ? e.boundingClientRect.top : null));
   const top = [...visible.entries()].filter(([, t]) => t !== null).sort((a, b) => a[1] - b[1])[0];
   if (!top) return;
-  links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + top[0]));
+  links.forEach(a => {
+    const on = a.getAttribute('href') === '#' + top[0];
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'location'); else a.removeAttribute('aria-current');
+  });
   const active = links.find(a => a.classList.contains('active'));
   if (active) $('crumb').textContent = active.textContent.replace(/\d+\s*$/, '').trim();
 }, { rootMargin: '-80px 0px -60% 0px', threshold: [0.1, 0.5] });
@@ -206,8 +254,8 @@ function jobLabel(j) {
 let data = null;
 const poll = poller({
   url: '/api/overview', every: 3000,
-  onData: (d, changed) => { data = d; setTarget(d.target); if (changed) render(); },
-  tick: { every: 30000, fn: () => { if (data) render(); } },
+  onData: (d, changed) => { data = d; setTarget(d.target); if (changed) rerender(render, { focus: false }); },
+  tick: { every: 30000, fn: () => { if (data) rerender(render, { focus: false }); } },
 });
 
 function render() {
@@ -236,7 +284,11 @@ function render() {
     <article class="kpi"><h3>AI 도우미 사용</h3><div class="value">${b.agent_tasks || 0}<small>/ ${b.agent_budget || '-'} (시간당 예산)</small></div><p class="delta">브라우저 ${(b.browser_minutes || 0).toFixed(1)}분 사용 (1시간)</p></article>`;
 
   const active = o.active_jobs || [], queued = o.queued_jobs || [];
-  $('nNow').textContent = active.length ? active.length : ''; $('nChecks').textContent = scs.length; $('nIssues').textContent = incs.length ? incs.length : ''; $('nDeploys').textContent = feats.length || '';
+  // 구역 배지도 railCount 를 거쳐 0일 때 빈칸으로 남고, 무엇의 수인지 함께 알립니다.
+  railCount('nNow', active.length, '진행 중');
+  railCount('nChecks', scs.length, '검사 항목');
+  railCount('nIssues', incs.length, '발견된 문제');
+  railCount('nDeploys', feats.length, '배포 변경');
   $('nowBody').innerHTML = active.length || queued.length ? `
     ${active.map(j => `<div class="act"><span class="tag">실행 중</span><div><b>${esc(KIND[j.kind] || j.kind)}</b> ${jobLabel(j)}<div class="sub">${esc(BROWSER[j.browser] || j.browser || '')}${j.since ? ` · ${ago(j.since)} 시작` : ''}${j.attempt > 1 ? ` · ${j.attempt}번째 시도` : ''} ${dev('job#' + j.id)}</div></div></div>`).join('')}
     ${queued.length ? `<div class="act"><span class="tag next">다음 차례</span><div><ol class="queue">${queued.slice(0, 6).map(j => `<li>${jobLabel(j)} <span class="sub">${esc(KIND[j.kind] || '')}</span></li>`).join('')}</ol>${queued.length > 6 ? `<div class="sub">외 ${queued.length - 6}건</div>` : ''}</div></div>` : ''}`
@@ -247,21 +299,32 @@ function render() {
   renderSupervisor(o.supervisor);
 
   const filt = (s) => !query || (s.title || '').toLowerCase().includes(query) || (s.id || '').toLowerCase().includes(query);
-  const visScs = scs.filter(filt);
-  $('scenarios').innerHTML = visScs.length ? visScs.map(s => `<tr>
+  // 숫자와 시각 열만 정렬할 수 있습니다. 누르기 전에는 서버가 준 순서 그대로입니다.
+  $('scHead').innerHTML = `<tr><th scope="col">검사 항목</th><th scope="col" class="fit">최근 결과</th>${sortTh(sort, 'next', '다음 검사', 'hide-sm fit')}${sortTh(sort, 'runs', '검사 / 정상', 'num hide-sm')}<th scope="col" class="hide-sm fit">중요도</th></tr>`;
+  bindSort($('scHead'), () => sort, setSort);
+  const visScs = sortRows(scs.filter(filt), sort, {
+    next: (s) => (['ACTIVE', 'SOAK'].includes(s.state) ? s.next_due_at || '' : ''),
+    runs: (s) => s.runs || 0,
+  });
+  const pageScs = visScs.slice(0, shownScs);
+  $('scenarios').removeAttribute('aria-busy');
+  $('scenarios').innerHTML = pageScs.length ? pageScs.map(s => `<tr>
       <td><div class="t">${esc(s.title || s.id)}</div><div class="sub">${st(STATE, s.state)}${s.soak ? ` 안정화 ${esc(s.soak)}` : ''} ${dev(`${s.id} · ${s.browser} · oracle=${s.oracle}`)}</div></td>
       <td class="fit">${st(OUTCOME, s.last_outcome) || '<span class="sub">아직 없음</span>'}<div class="sub">${s.last_run_at ? ago(s.last_run_at) : ''}${s.consecutive_failures ? ` · 연속 ${s.consecutive_failures}회 실패` : ''}</div></td>
-      <td class="hide-sm when">${['ACTIVE', 'SOAK'].includes(s.state) ? esc(until(s.next_due_at)) : '<span class="sub">예정 없음</span>'}</td>
-      <td class="num hide-sm">${s.runs} / ${s.passes}${s.flakes ? `<div class="sub">일시 오류 ${s.flakes}</div>` : ''}</td>
-      <td class="hide-sm when">${esc(CLASS[s.class] || s.class)}</td></tr>`).join('')
-    : `<tr><td colspan="5" class="empty">${query ? `<b>"${esc(query)}"에 맞는 검사 항목이 없습니다</b>검색어를 지우면 전체 목록이 보입니다.` : '<b>등록된 검사 항목이 없습니다</b>scenarios 폴더에 검사 파일을 추가하고 vigil add 를 실행하세요.'}</td></tr>`;
+      <td class="hide-sm when" data-lab="다음 검사">${['ACTIVE', 'SOAK'].includes(s.state) ? esc(until(s.next_due_at)) : '<span class="sub">예정 없음</span>'}</td>
+      <td class="num hide-sm" data-lab="검사 / 정상">${s.runs} / ${s.passes}${s.flakes ? `<div class="sub">다시 하니 통과 ${s.flakes}회</div>` : ''}</td>
+      <td class="hide-sm when" data-lab="중요도">${esc(CLASS[s.class] || s.class)}</td></tr>`).join('')
+    : `<tr><td colspan="5" class="empty">${query ? `<b>"${esc(query)}"에 맞는 검사 항목이 없습니다</b>검색어를 지우면 전체 목록이 보입니다.` : '<b>등록된 검사 항목이 없습니다</b>확인하고 싶은 화면이 있으면 <a href="/#qaIntake">할 일 화면에서 직접 확인 요청하기</a>에 상황을 적어 주세요. AI가 대신 눌러 보고 검사 절차를 만듭니다.<p class="dev sub">터미널에서는 scenarios 폴더에 검사 파일을 넣고 <span class="mono">vigil add</span>를 실행합니다.</p>'}</td></tr>`;
+  $('moreChecks').innerHTML = visScs.length > pageScs.length ? `<button class="btn" id="moreChecksBtn">더 보기 (+${visScs.length - pageScs.length})</button>` : '';
+  const mcb = $('moreChecksBtn'); if (mcb) mcb.onclick = () => { shownScs += PAGE_SIZE; rerender(render); };
   $('legend').innerHTML = `${st(OUTCOME, 'PASS')} 약속대로 동작 &nbsp; ${st(OUTCOME, 'APP_FAILURE')} 약속과 다르게 동작, 개발팀 확인 &nbsp; ${st(OUTCOME, 'SCRIPT_DRIFT')} 화면 구조가 바뀌어 검사 자체를 고쳐야 함 &nbsp; ${st(OUTCOME, 'ENV_FAILURE')} 네트워크나 로그인 등 검사 환경 문제`;
 
   $('issuesBody').innerHTML = incs.length ? `<table><thead><tr><th>문제</th><th class="fit">종류</th><th class="hide-sm fit">발견 시각</th></tr></thead><tbody>${incs.map(i => `<tr><td class="t">${i.md_rel ? `<a href="/evidence/${esc(i.md_rel)}" target="_blank" rel="noopener">${esc(incTitle(i.title))}</a>` : esc(incTitle(i.title))}${causeHTML(i, 'inc' + i.id)}</td><td class="fit">${st(INCIDENT, i.kind)}</td><td class="hide-sm fit">${esc(i.created_at)} <span class="sub">(${ago(i.created_at)})</span></td></tr>`).join('')}</tbody></table>`
     : `<div class="empty"><b>현재 확인된 문제가 없습니다</b>문제가 확인되면 재현 절차와 증거가 여기에 정리됩니다.</div>`;
 
   const visRuns = runs.filter(filt);
-  const shown = showAll ? visRuns : visRuns.slice(0, 20);
+  const shown = visRuns.slice(0, shownRuns);
+  $('runs').removeAttribute('aria-busy');
   $('runs').innerHTML = shown.length ? shown.map(r => {
     const why = causeHTML(r, 'run' + r.id);
     const isOpen = open.has(String(r.id));
@@ -271,11 +334,12 @@ function render() {
   }).join('') : `<tr><td colspan="4" class="empty"><b>${query ? '검색 결과가 없습니다' : '아직 검사 기록이 없습니다'}</b></td></tr>`;
   bindCause($('runs'));
   bindCause($('issuesBody'));
-  $('more').innerHTML = visRuns.length > 20 ? `<button class="btn" id="moreBtn">${showAll ? '최근 20건만 보기' : `${visRuns.length - 20}건 더 보기`}</button>` : '';
-  const mb = $('moreBtn'); if (mb) mb.onclick = () => { showAll = !showAll; render(); };
+  $('more').innerHTML = visRuns.length > shown.length ? `<button class="btn" id="moreBtn">더 보기 (+${visRuns.length - shown.length})</button>` : '';
+  const mb = $('moreBtn'); if (mb) mb.onclick = () => { shownRuns += PAGE_SIZE; rerender(render); };
   bindRows('#runs tr.click', tr => { const id = tr.dataset.id; open.has(id) ? open.delete(id) : open.add(id); render(); document.querySelector(`#runs tr[data-id="${id}"]`)?.focus(); });
   for (const id of open) { const el = $('steps-' + id); const tr = document.querySelector(`#runs tr[data-id="${id}"]`); if (el && tr && el.dataset.loaded !== '1') loadSteps(el, tr.dataset.dir); }
 
+  $('features').removeAttribute('aria-busy');
   $('features').innerHTML = feats.length ? feats.map(f => `<tr><td><div class="t">${esc(f.summary || f.id)}</div><div class="sub">${esc(f.id)} ${dev(f.sha)}</div></td><td class="fit">${st(READY, f.readiness)}<div class="sub">${f.handled ? '관련 검사 실행 완료' : '관련 검사 예정'}</div></td><td class="hide-sm fit">${esc(f.shipped_at)}</td></tr>`).join('')
     : `<tr><td colspan="3" class="empty"><b>최근 배포된 변경이 없습니다</b>저장소에 새 커밋이 배포되면 여기에 표시됩니다.</td></tr>`;
 }
@@ -284,23 +348,25 @@ const stepsCache = {};
 async function loadSteps(el, dir) {
   if (!dir) { el.textContent = '상세 기록이 없습니다.'; el.dataset.loaded = '1'; return; }
   try {
-    if (!stepsCache[dir]) { const r = await fetch('/api/run/steps?dir=' + encodeURIComponent(dir)); if (!r.ok) throw new Error('HTTP ' + r.status); stepsCache[dir] = await r.json(); }
+    if (!stepsCache[dir]) { const r = await fetch('/api/run/steps?dir=' + encodeURIComponent(dir)); if (!r.ok) throw await httpFail(r, '단계 기록을 불러오지 못했습니다.'); stepsCache[dir] = await r.json(); }
     el.outerHTML = stepsHTML(stepsCache[dir].steps || []).replace('<div class="steps">', `<div class="steps" id="${el.id}" data-loaded="1">`);
-  } catch (e) { el.innerHTML = `<div class="errbox"><span>단계 기록을 불러오지 못했습니다 (${esc(e.message)})</span><button class="btn" data-retry="${esc(dir)}">다시 시도</button></div>`; el.querySelector('[data-retry]').onclick = () => { delete stepsCache[dir]; el.dataset.loaded = ''; render(); }; }
+  } catch (e) { el.innerHTML = `<div class="errbox"><span>${errHTML(e)}</span><button class="btn" data-retry="${esc(dir)}">다시 시도</button></div>`; el.querySelector('[data-retry]').onclick = () => { delete stepsCache[dir]; el.dataset.loaded = ''; render(); }; }
 }
 
 function renderAgent(a) {
-  if (!a) { $('agentMeta').textContent = '배포된 새 기능을 직접 살펴보고 검사 항목을 제안합니다'; $('agentBody').innerHTML = '<div class="empty"><b>아직 실행된 적이 없습니다</b>새 기능이 배포되거나 vigil discover 를 실행하면 활동이 여기에 표시됩니다.</div>'; return; }
-  const status = { running: ['지금 일하는 중', 'ok'], done: ['작업 완료', 'muted'], stale: ['응답 없음, 중단된 듯', 'warn'] };
+  if (!a) { $('agentMeta').textContent = '배포된 새 기능을 직접 살펴보고 검사 항목을 제안합니다'; $('agentBody').innerHTML = '<div class="empty"><b>아직 실행된 적이 없습니다</b>새 기능이 배포되면 AI 도우미가 스스로 살펴보고, 그 활동이 여기에 표시됩니다.<p class="dev sub">터미널에서는 <span class="mono">vigil discover</span>로 지금 한 번 살펴보게 할 수 있습니다.</p></div>'; return; }
   $('agentMeta').textContent = `대상 ${a.feature} · 마지막 활동 ${ago(a.updated_at)}`;
   const calls = (a.tool_calls || []).slice().reverse();
+  const pageCalls = calls.slice(0, shownCalls);
   $('agentBody').innerHTML = `
-    <div class="agent-head">${st(status, a.status)}${a.decision ? `<span class="sub">결론</span>${st(DECISION, a.decision)}` : ''}${a.candidates ? `<span class="sub">제안한 검사 ${a.candidates}개</span>` : ''}${a.sandbox ? `<span class="sub">격리 환경 ${esc(a.sandbox)}</span>` : ''}${a.attempts > 1 ? `<span class="sub">모델 재시도 ${a.attempts}회</span>` : ''}</div>
+    <div class="agent-head">${st(REQ_STATUS, REQ_STATUS[a.status] ? a.status : '', '상태 확인 중')}${a.decision ? `<span class="sub">결론</span>${st(DECISION, a.decision)}` : ''}${a.candidates ? `<span class="sub">제안한 검사 ${a.candidates}개</span>` : ''}${a.sandbox ? `<span class="sub">격리 환경 ${esc(a.sandbox)}</span>` : ''}${a.attempts > 1 ? `<span class="sub">모델 재시도 ${a.attempts}회</span>` : ''}</div>
     ${a.retries && a.retries.length ? `<div class="sub">AI 모델 오류가 있었습니다: ${esc(a.retries[a.retries.length - 1])}</div>` : ''}
     ${a.last_text ? `<div class="msg">${esc(a.last_text)}</div>` : ''}
-    <div class="sub" style="padding:6px 0">브라우저에서 한 일 ${calls.length}가지, 최근 것이 위</div>
-    <div class="acts">${calls.map(c => { const [tag, t] = toolLine(c); return `<div class="act${c.ok === false ? ' fail' : ''}"><span class="tag">${esc(tag)}</span><div><b>${esc(t)}</b> <span class="sub">${c.ok === undefined ? '진행 중' : c.ok ? '' : '실패'}</span> ${dev('#' + c.n + ' ' + c.args)}${c.preview ? `<div class="out${c.ok === false ? '' : ' dev'}">${esc(c.preview)}</div>` : ''}</div></div>`; }).join('') || '<div class="empty">아직 브라우저를 조작하지 않았습니다.</div>'}</div>
+    <div class="sub" style="padding:6px 0">브라우저에서 한 일 ${calls.length}가지 중 최근 ${Math.min(pageCalls.length, calls.length)}가지, 최근 것이 위</div>
+    <div class="acts">${pageCalls.map(c => { const [tag, t] = toolLine(c); return `<div class="act${c.ok === false ? ' fail' : ''}"><span class="tag">${esc(tag)}</span><div><b>${esc(t)}</b> <span class="sub">${c.ok === undefined ? '진행 중' : c.ok ? '' : '실패'}</span> ${dev('#' + c.n + ' ' + c.args)}${c.preview ? `<div class="out${c.ok === false ? '' : ' dev'}">${esc(c.preview)}</div>` : ''}</div></div>`; }).join('') || '<div class="empty">아직 브라우저를 조작하지 않았습니다.</div>'}</div>
+    ${calls.length > pageCalls.length ? `<div class="more"><button class="btn" id="moreCalls">이전 기록 더 보기 (+${calls.length - pageCalls.length})</button></div>` : ''}
     <p class="sub dev">증적 폴더: <a href="/evidence/${esc(a.dir)}/" target="_blank" rel="noopener">${esc(a.dir)}</a></p>`;
+  const mcl = $('moreCalls'); if (mcl) mcl.onclick = () => { shownCalls += CALL_PAGE; rerender(render); };
 }
 
 // ---- 검사 시간대 (active hours) ------------------------------------------------
@@ -345,49 +411,54 @@ async function winSend(method, body) {
   const opt = { method, cache: 'no-store' };
   if (body) { opt.headers = { 'Content-Type': 'application/json' }; opt.body = JSON.stringify(body); }
   const r = await fetch('/api/schedule/window', opt);
-  const text = await r.text();
-  if (!r.ok) throw new Error(text.trim() || ('HTTP ' + r.status));
-  return JSON.parse(text);
+  if (!r.ok) throw await httpFail(r, '검사 시간대를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+  return r.json();
 }
 document.querySelectorAll('#window input').forEach(el => el.addEventListener('input', () => { winDirty = true; }));
-$('winSave').onclick = async () => {
+// 토스트는 3초 뒤 사라지므로, 결과 문장은 버튼 옆 영수증 자리에 남깁니다.
+// 이 자리는 renderWindow 가 다시 그리지 않아 폴링에 지워지지 않습니다.
+function winReceipt(html, retry) {
+  const el = $('winReceipt'); if (!el) return;
+  el.innerHTML = html ? `${html}${retry ? ' <button class="btn" id="winRetry">다시 시도</button>' : ''}` : '';
+  const b = $('winRetry'); if (b) b.onclick = retry;
+}
+async function winWrite(kind) {
+  const save = kind === 'save';
+  winReceipt(save ? '저장하는 중입니다.' : '설정 파일 값으로 되돌리는 중입니다.');
   try {
-    const w = await winSend('POST', winForm());
+    const w = save ? await winSend('POST', winForm()) : await winSend('DELETE');
     winDirty = false; renderWindow(w);
     if (data) data.window = w;
-    toast('검사 시간대를 저장했습니다. 다음 확인 주기부터 적용됩니다');
-  } catch (e) { toast('저장하지 못했습니다: ' + e.message); }
-};
-$('winReset').onclick = async () => {
-  try {
-    const w = await winSend('DELETE');
-    winDirty = false; renderWindow(w);
-    if (data) data.window = w;
-    toast('설정 파일 값으로 되돌렸습니다');
-  } catch (e) { toast('되돌리지 못했습니다: ' + e.message); }
-};
+    winReceipt(save ? '저장했습니다. 다음 확인 주기부터 적용됩니다.' : '설정 파일(vigil.yaml) 값으로 되돌렸습니다.');
+    toast(save ? '검사 시간대를 저장했습니다' : '설정 파일 값으로 되돌렸습니다');
+  } catch (e) {
+    // 실패하면 winDirty 를 내리지 않아, 폼에 남은 값이 저장된 값처럼 보이지 않게 합니다.
+    winReceipt(`${errHTML(e)} 저장되지 않은 변경이 있습니다.`, () => winWrite(kind));
+    toast(save ? '검사 시간대를 저장하지 못했습니다' : '되돌리지 못했습니다');
+  }
+}
+$('winSave').onclick = () => winWrite('save');
+$('winReset').onclick = () => winWrite('reset');
 
 // ---- 커버리지 확장 (supervisor) ------------------------------------------------
-const VERB = {
-  discover_route: ['새 영역 탐색', 'ok'], repair_script: ['검사 스크립트 수리', 'warn'],
-  validate_candidate: ['후보 검증', 'info'], run_scenario: ['지금 실행', 'info'],
-  raise_cadence: ['검사 주기 조정', 'info'], quarantine: ['일시 제외', 'warn'],
-};
 function renderSupervisor(s) {
   if (!s) return;
+  // 꺼져 있으면 서버가 주기를 "0s"로 내려보냅니다. 그대로 쓰면 "0초마다"가 되므로
+  // 주기를 읽을 수 있을 때만 문구에 붙입니다.
+  const tick = dur(s.tick);
   if (!s.enabled) {
-    $('supBody').innerHTML = `<div class="empty"><b>꺼져 있습니다</b>vigil.yaml 의 <span class="mono">supervisor.enabled: true</span> 로 켭니다. 켜면 ${esc(s.tick)}마다 검사가 없는 영역을 찾습니다.</div>`;
+    $('supBody').innerHTML = `<div class="empty"><b>꺼져 있습니다</b>vigil.yaml 의 <span class="mono">supervisor.enabled: true</span> 로 켭니다. 켜면 ${tick ? `${esc(tick)}마다` : '주기적으로'} 검사가 없는 영역을 찾습니다.</div>`;
     return;
   }
   const mode = s.dry_run
     ? `<span class="st st-muted"><i></i>연습 모드</span> <span class="sub">계획만 세우고 실행하지 않습니다</span>`
-    : `<span class="st st-ok"><i></i>동작 중</span> <span class="sub">${esc(s.tick)}마다 · 모델 ${esc(s.model)}</span>`;
+    : `<span class="st st-ok"><i></i>동작 중</span> <span class="sub">${tick ? `${esc(tick)}마다 · ` : ''}모델 ${esc(s.model)}</span>`;
   if (!s.ran) {
-    $('supBody').innerHTML = `<div class="win-status">${mode}</div><div class="empty"><b>아직 첫 판단 전입니다</b>${esc(s.tick)} 안에 첫 결과가 여기 표시됩니다.</div>`;
+    $('supBody').innerHTML = `<div class="win-status">${mode}</div><div class="empty"><b>아직 첫 판단 전입니다</b>${tick ? `${esc(tick)} 안에` : '다음 주기에'} 첫 결과가 여기 표시됩니다.</div>`;
     return;
   }
   const rows = (s.verdicts || []).map(v => {
-    const [label, tone] = VERB[v.action.verb] || [v.action.verb, 'muted'];
+    const [label, tone] = ACTION[v.action.verb] || ['그 밖의 작업', 'muted'];
     const state = v.applied ? '<span class="st st-ok"><i></i>실행됨</span>'
       : v.accepted ? '<span class="st st-info"><i></i>승인, 미실행</span>'
       : '<span class="st st-muted"><i></i>거부</span>';
@@ -412,6 +483,8 @@ function renderSupervisor(s) {
 }
 
 poll.start();
+// 메인 레일 배지는 이 화면의 집계가 아니라 사람이 손대야 할 건수입니다.
+railBadgePoll();
 </script>
 </body>
 </html>

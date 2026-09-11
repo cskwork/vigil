@@ -7,7 +7,9 @@
 <title>할 일, QA 현황판</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"></noscript>
 <link rel="stylesheet" href="/ui/theme.css">
 </head>
 <body>
@@ -15,16 +17,19 @@
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
     <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
-    <a href="/" class="active" aria-current="page">할 일 <span class="cnt" id="nTodo"></span></a>
-    <a href="/results">검증 결과</a>
-    <a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a>
-    <a href="/activity">시스템 활동</a>
-    <a href="/help">도움말</a>
-    <div class="rail-foot">
+    <ul class="tree">
+      <li><a href="/" class="active" aria-current="page">할 일 <span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results">검증 결과 <span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
+      <li><a href="/activity">시스템 활동</a></li>
+      <li><a href="/help">도움말</a></li>
+    </ul>
+    <details class="rail-foot" id="railPrefs" open>
+      <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
       <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
-    </div>
+    </details>
   </nav>
   <div class="content">
     <header class="topbar">
@@ -34,23 +39,25 @@
     <main id="main" tabindex="-1">
       <div id="fetchErr"></div>
 
-      <section class="intro" id="intro" aria-label="이 도구는 이렇게 동작합니다" hidden>
-        <h2>이 도구는 이렇게 동작합니다</h2>
+      <section class="hero" aria-label="지금 상태">
+        <h1 id="heroLine"><span class="skel" style="width:14rem"></span></h1>
+        <p id="heroSub">불러오는 중입니다.</p>
+        <p class="sr-only" id="todoStatus" role="status"></p>
+        <p class="hero-links purpose"><a href="#intro" id="introOpen">이 도구가 하는 일</a><a href="/help#tasks">이 화면의 말이 궁금하면 도움말</a></p>
+      </section>
+
+      <details class="intro" id="intro" open hidden>
+        <summary><h2>이 도구는 이렇게 동작합니다</h2></summary>
         <ol class="steps4">
           <li><b>1. 감지</b><span>새 커밋, Jira 이슈, 운영 로그에서 확인할 거리를 찾습니다.</span></li>
           <li><b>2. 재현하고 검사 작성</b><span>AI가 브라우저로 직접 눌러 보고 검사 절차를 만듭니다.</span></li>
           <li><b>3. 사람 승인</b><span>사람이 확인하고 승인해야 정식 검사가 됩니다.</span></li>
           <li><b>4. 매일 자동 실행</b><span>승인된 검사는 매일, 그리고 배포 직후에 실행됩니다.</span></li>
         </ol>
-        <div class="intro-foot"><a href="/help">용어와 자주 하는 작업 보기</a><button class="btn" id="introClose">알겠습니다, 다시 보지 않기</button></div>
-      </section>
+        <div class="intro-foot"><a href="/help">용어와 자주 하는 작업 보기</a><button class="btn" id="introClose">접어 두기</button></div>
+      </details>
 
-      <section class="hero" aria-label="지금 상태">
-        <h1 id="heroLine"><span class="skel" style="width:14rem"></span></h1>
-        <p id="heroSub">불러오는 중입니다.</p>
-      </section>
-
-      <section aria-label="확인할 일" aria-live="polite">
+      <section aria-label="확인할 일">
         <div class="cards" id="cards"></div>
       </section>
 
@@ -83,15 +90,27 @@
 <script>
 let data = null;
 
-// first visit: the 4-step strip until the reader dismisses it
-if (localStorage.getItem('vigil.intro') !== 'done') $('intro').hidden = false;
-$('introClose').onclick = () => { localStorage.setItem('vigil.intro', 'done'); $('intro').hidden = true; $('main').focus(); };
+// 첫 방문에는 4단계 안내를 펼쳐 두고, 접은 뒤에는 히어로의 '이 도구가 하는 일'
+// 링크로 언제든 다시 펼칩니다. 저장 키는 그대로라 이미 접어 둔 사람은 그대로입니다.
+if (store.get('vigil.intro') !== 'done') { $('intro').hidden = false; foldOnNarrow($('intro')); }
+$('introClose').onclick = () => { store.set('vigil.intro', 'done'); $('intro').hidden = true; $('introOpen').focus(); };
+$('introOpen').onclick = (e) => { e.preventDefault(); $('intro').hidden = false; $('intro').open = true; $('intro').querySelector('summary').focus(); };
 
 // the request box stays folded until asked for; the choice is remembered
-$('qaIntake').open = localStorage.getItem('vigil.intake') === 'open';
+$('qaIntake').open = store.on('vigil.intake');
 const syncHint = () => { $('qaHint').textContent = $('qaIntake').open ? '접기' : '펼치기'; $('qaIntake').querySelector('summary').setAttribute('aria-expanded', String($('qaIntake').open)); };
-$('qaIntake').addEventListener('toggle', () => { localStorage.setItem('vigil.intake', $('qaIntake').open ? 'open' : 'closed'); syncHint(); });
+$('qaIntake').addEventListener('toggle', () => { store.setOn('vigil.intake', $('qaIntake').open); syncHint(); });
 syncHint();
+
+// 다른 화면의 빈 상태가 '직접 확인 요청하기'로 보내면, 상자를 펼치고 입력란에 커서를 둡니다.
+function openIntake() { $('qaIntake').open = true; $('qaSituation').focus(); }
+document.addEventListener('click', (e) => {
+  const a = e.target.closest && e.target.closest('a[href$="#qaIntake"]');
+  if (!a) return;
+  e.preventDefault();
+  openIntake();
+});
+if (location.hash === '#qaIntake') openIntake();
 
 let qaSubmitting = false;
 $('qaForm').onsubmit = async (e) => {
@@ -110,7 +129,8 @@ $('qaForm').onsubmit = async (e) => {
     if (!r.ok) throw new Error(result.error || `접수하지 못했습니다 (HTTP ${r.status})`);
     $('qaSituation').value = '';
     $('qaFeedback').className = result.warning ? 'qa-feedback warning' : 'qa-feedback success';
-    $('qaFeedback').textContent = result.warning || `접수했습니다. 요청 ${result.feature_id}을 가장 먼저 확인합니다. 결과는 검증 결과 화면에 나옵니다.`;
+    if (result.warning) { $('qaFeedback').textContent = result.warning; }
+    else { $('qaFeedback').innerHTML = `요청을 접수했습니다. 이 요청(${esc(result.feature_id)})을 먼저 확인합니다. 진행 상황은 <a href="/results#requests">검증 결과 화면의 확인 요청 칸</a>에 표시됩니다.`; }
   } catch (err) {
     $('qaFeedback').className = 'qa-feedback error';
     $('qaFeedback').textContent = err.message;
@@ -129,6 +149,17 @@ const poll = poller({
   tick: { every: 30000, fn: () => { if (data) render(); } },
 });
 
+// Re-rendering identical markup would move focus, collapse text selection and
+// make a screen reader read the list again. The tick runs every 30s only to
+// refresh relative times, so compare the finished HTML first.
+const lastHTML = {};
+function setHTML(id, html) {
+  if (lastHTML[id] === html) return false;
+  lastHTML[id] = html;
+  $(id).innerHTML = html;
+  return true;
+}
+
 // The fixed order of the action cards. Nothing with a count of 0 is drawn.
 const CARDS = [
   { key: 'pending_approval', tone: 'warn', title: (n) => `승인 대기 ${n}건`,
@@ -145,7 +176,7 @@ const CARDS = [
     cta: '제외된 검사 보기', href: '/scripts?state=QUARANTINED' },
   { key: 'findings', tone: 'warn', title: (n) => `데이터 발견 사항 ${n}건`,
     why: '화면 값과 서버 응답, 도메인 규칙을 대조해 찾은 이상한 점입니다. 확인 후 닫아 주세요.',
-    cta: '발견 사항 보기', href: '/scripts' },
+    cta: '발견 사항 보기', href: '/scripts?state=FINDINGS' },
   { key: 'env_incidents', tone: 'info', title: (n) => `환경 문제 ${n}건`,
     why: '검사 대상 서비스가 아니라 검사 환경(네트워크, 접속) 문제입니다.',
     cta: '환경 문제 보기', href: '/results?outcome=ENV_FAILURE' },
@@ -154,8 +185,7 @@ const CARDS = [
 function render() {
   const d = data; if (!d) return;
   const c = d.counts || {}, total = c.total || 0;
-  railCount('nTodo', total);
-  railCount('nScripts', c.pending_approval || 0);
+  railCounts(c);
   document.title = (total ? `할 일 ${total}건, ` : '') + 'QA 현황판';
 
   $('heroLine').textContent = total ? `지금 확인할 일 ${total}건` : '지금 확인할 일이 없습니다';
@@ -165,19 +195,22 @@ function render() {
     ? `최근 ${h.window_hours || 1}시간 동안 자동 검사 ${h.runs}건을 실행했고 ${h.failures}건이 실패했습니다.`
     : `최근 ${h.window_hours || 1}시간 동안 실행된 자동 검사가 없습니다.`;
 
-  $('cards').innerHTML = CARDS.filter(card => (c[card.key] || 0) > 0).map(card => {
+  const status = total ? `확인할 일 ${total}건, 승인 대기 ${c.pending_approval || 0}건` : '지금 확인할 일이 없습니다';
+  if ($('todoStatus').textContent !== status) $('todoStatus').textContent = status;
+
+  setHTML('cards', CARDS.filter(card => (c[card.key] || 0) > 0).map(card => {
     const n = c[card.key];
     return `<article class="card ${card.tone}">
       <h2>${st({ x: [card.title(n), card.tone] }, 'x')}</h2>
       <p>${esc(card.why)}</p>
       <a class="btn primary" href="${card.href}">${esc(card.cta)}</a>
     </article>`;
-  }).join('');
+  }).join(''));
 
   const clear = $('allClear');
   clear.hidden = total > 0;
   if (!total) {
-    $('allClearBody').innerHTML = `<div class="clear-panel">
+    setHTML('allClearBody', `<div class="clear-panel">
       <p><b>모두 확인된 상태입니다.</b> 사람이 지금 해야 할 일은 없습니다.</p>
       <ul>
         <li>다음 자동 검사: <b>${d.next_run_at ? esc(when(d.next_run_at)) + ' (' + esc(until(d.next_run_at)) + ')' : '예정 없음'}</b></li>
@@ -185,21 +218,21 @@ function render() {
       </ul>
       <p class="sub">확인하고 싶은 화면이 있으면 아래 <b>직접 확인 요청하기</b>에 상황을 적어 주세요.${d.can_request ? '' : ' 지금은 이 화면에 실행기가 붙어 있지 않아 접수만 막혀 있습니다. 터미널에서 <span class="mono">vigil loop --ui 127.0.0.1:8787</span>로 실행하면 사용할 수 있습니다.'}</p>
       <button class="btn primary" id="openIntake">직접 확인 요청하기</button>
-    </div>`;
+    </div>`);
     const b = $('openIntake');
-    if (b) b.onclick = () => { $('qaIntake').open = true; $('qaSituation').focus(); };
+    if (b) b.onclick = () => openIntake();
   }
 
   const recent = d.recent || [];
-  $('recent').innerHTML = recent.length ? `<ul class="feed">${recent.map(r => `<li>
+  const recentHTML = recent.length ? `<ul class="feed">${recent.map(r => `<li>
       ${r.cause ? '' : stTip(OUTCOME, r.outcome)}
       <span class="t">${esc(r.title || r.scenario_id)}</span>
       <span class="sub">${esc(BROWSER[r.browser] || r.browser || '')}${r.environment ? ' · 환경 ' + esc(r.environment) : ''}</span>
       <span class="sub when">${esc(ago(r.at))}</span>
       ${causeHTML(r, 'trun' + r.run_id)}
     </li>`).join('')}</ul><p class="sub">자세한 결과와 증거는 <a href="/results">검증 결과</a>에서 봅니다.</p>`
-    : `<div class="empty"><b>아직 실행된 검사가 없습니다</b>검사 절차를 하나 만든 뒤 터미널에서 <span class="mono">vigil run &lt;검사 이름&gt;</span>으로 바로 실행해 볼 수 있습니다.</div>`;
-  bindCause($('recent'));
+    : `<div class="empty"><b>아직 실행된 검사가 없습니다</b>확인하고 싶은 화면이 있으면 <a href="#qaIntake">직접 확인 요청하기</a>에 상황을 적어 주세요. 승인된 검사가 생기면 이 자리에 자동 실행 기록이 쌓입니다.<p class="dev sub">터미널에서는 <span class="mono">vigil run &lt;검사 이름&gt;</span>으로 한 번 실행해 볼 수 있습니다.</p></div>`;
+  if (setHTML('recent', recentHTML)) bindCause($('recent'));
 }
 
 poll.start();
