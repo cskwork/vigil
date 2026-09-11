@@ -29,8 +29,7 @@ import (
 type pi struct {
 	cfg       *config.Config
 	piPath    string
-	provider  string
-	model     string
+	chain     *Chain // ordered model fallback list with shared cooldown state (Run and Plan)
 	extension string
 	tools     string
 	redactor  *Redactor
@@ -45,9 +44,10 @@ const (
 	extRelPath = "dist/extensions/agent-browser/index.js"
 )
 
-// NewPi builds the pi-based Browser Agent adapter (zai/glm-5.3-flash, thinking high,
-// agent_browser native tool, optional nono sandbox). It returns an error (never
-// panics) when pi is missing so the caller can run without an agent (rule 12).
+// NewPi builds the pi-based Browser Agent adapter (model fallback chain from
+// agent.models or the legacy agent.model, agent_browser native tool, optional
+// nono sandbox). It returns an error (never panics) when pi is missing so the
+// caller can run without an agent (rule 12).
 func NewPi(cfg *config.Config) (Adapter, error) {
 	if cfg == nil {
 		return nil, errors.New("agent: nil config")
@@ -56,14 +56,16 @@ func NewPi(cfg *config.Config) (Adapter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent: `pi` not found on PATH (install: npm i -g @earendil-works/pi-coding-agent): %w", err)
 	}
-	provider, model := splitModel(cfg.Agent.Model)
+	chain, err := NewChainFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	ext := ResolveExtension(cfg)
 	mode, _, warn := ResolveSandboxMode(cfg)
 	p := &pi{
 		cfg:       cfg,
 		piPath:    piPath,
-		provider:  provider,
-		model:     model,
+		chain:     chain,
 		extension: ext,
 		tools:     "agent_browser,read",
 		redactor:  RedactorFor(cfg.Personas, os.Environ()),
@@ -72,14 +74,6 @@ func NewPi(cfg *config.Config) (Adapter, error) {
 		logger:    log.New(os.Stderr, "[agent] ", log.LstdFlags),
 	}
 	return p, nil
-}
-
-func splitModel(m string) (provider, model string) {
-	m = strings.TrimSpace(m)
-	if i := strings.IndexByte(m, '/'); i > 0 {
-		return m[:i], m[i+1:]
-	}
-	return "zai", m
 }
 
 // BundledExtensionPath is vigil's own dependency-free pi extension
@@ -152,15 +146,26 @@ func (p *pi) Doctor(ctx context.Context) error {
 		}
 	}
 	// Model catalog check: `pi --list-models <model>` lists only providers whose key is present.
-	lctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(lctx, p.piPath, "--list-models", p.model)
-	cmd.Env = p.env("", "")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		problems = append(problems, fmt.Sprintf("pi --list-models failed: %v: %s", err, strings.TrimSpace(string(out))))
-	} else if !modelListed(string(out), p.provider, p.model) {
-		problems = append(problems, fmt.Sprintf("model %s/%s not in pi catalog (check ~/.pi/agent/models.json and the %s key): %s", p.provider, p.model, p.provider, firstLine(string(out))))
+	// One missing chain entry is a warning (the chain skips it); no listed entry is a problem.
+	var missing []string
+	for _, e := range p.chain.Entries() {
+		lctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		cmd := exec.CommandContext(lctx, p.piPath, "--list-models", e.Model)
+		cmd.Env = p.env("", "")
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("pi --list-models %s failed: %v: %s", e.Model, err, strings.TrimSpace(string(out))))
+		} else if !modelListed(string(out), e.Provider, e.Model) {
+			missing = append(missing, fmt.Sprintf("%s (check ~/.pi/agent/models.json and the %s key): %s", e.Name(), e.Provider, firstLine(string(out))))
+		}
+	}
+	if len(missing) > 0 && len(missing) == p.chain.Len() {
+		problems = append(problems, "no chain model in pi catalog: "+strings.Join(missing, "; "))
+	} else {
+		for _, m := range missing {
+			p.logger.Printf("WARN model %s not in pi catalog; the chain skips to the next entry", m)
+		}
 	}
 	if p.sandbox != SandboxNone {
 		dir := filepath.Join(os.TempDir(), "vigil-doctor")
@@ -199,6 +204,53 @@ func firstLine(s string) string {
 	return s
 }
 
+// AuthStatus is the JSON of `pi auth check --provider <p> --json --no-refresh`.
+type AuthStatus struct {
+	Status   string `json:"status"` // ready | not_ready
+	Provider string `json:"provider"`
+	AuthType string `json:"authType,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// Ready reports whether pi has usable credentials for the provider.
+func (s AuthStatus) Ready() bool { return s.Status == "ready" }
+
+// ParseAuthCheck decodes the auth check output (tolerating a leading warning line).
+func ParseAuthCheck(out []byte) (AuthStatus, error) {
+	var st AuthStatus
+	txt := strings.TrimSpace(string(out))
+	i := strings.IndexByte(txt, '{')
+	if i < 0 {
+		return st, fmt.Errorf("no JSON in pi auth check output: %s", firstLine(txt))
+	}
+	if err := json.Unmarshal([]byte(txt[i:]), &st); err != nil {
+		return st, fmt.Errorf("pi auth check output: %w: %s", err, firstLine(txt))
+	}
+	return st, nil
+}
+
+// ProviderAuth runs `pi auth check` for one provider without refreshing OAuth
+// tokens (doctor). A not_ready status is returned with err == nil; err means the
+// check itself could not run or answered without JSON.
+func ProviderAuth(ctx context.Context, cfg *config.Config, piPath, provider string) (AuthStatus, error) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, piPath, "auth", "check", "--provider", provider, "--json", "--no-refresh")
+	cmd.Env = agentEnv(cfg, "", "")
+	out, runErr := cmd.CombinedOutput()
+	st, err := ParseAuthCheck(out)
+	if err != nil {
+		if runErr != nil {
+			return st, fmt.Errorf("%v: %s", runErr, firstLine(string(out)))
+		}
+		return st, err
+	}
+	if st.Provider == "" {
+		st.Provider = provider
+	}
+	return st, nil
+}
+
 // ---- Run ------------------------------------------------------------------
 
 // Evidence file names written under evidenceDir.
@@ -218,8 +270,28 @@ var (
 	authRe      = regexp.MustCompile(`(?i)\b401\b|\b403\b|invalid api key|unauthori[sz]ed|authentication|no api key|missing api key|api key not|insufficient.*balance|quota`)
 )
 
-// Run executes one bounded task. It retries transient provider errors with
-// backoff and returns Result.ModelUnavailable=true (nil error) when exhausted.
+// providerErrorReason classifies a failed attempt's error text. kind is
+// "transient" (429, 5xx, network: worth retrying), "auth" (key/quota: not worth
+// retrying) or "" when the provider did not fail (task/tool problem).
+func providerErrorReason(errText string) (kind, reason string) {
+	switch {
+	case errText == "":
+		return "", ""
+	case authRe.MatchString(errText) && !transientRe.MatchString(errText):
+		return "auth", "auth/quota: " + firstLine(errText)
+	case transientRe.MatchString(errText):
+		return "transient", "transient: " + firstLine(errText)
+	}
+	return "", ""
+}
+
+// Run executes one bounded task on the model chain. On a provider error the
+// current entry is cooled down and the next available entry is tried at once
+// when one exists; otherwise (single entry, or every other entry cooling down)
+// a transient error retries the same entry with agent.backoff up to
+// agent.retries times, as before the chain existed, and only then is the entry
+// cooled down. Auth/quota errors are never retried on the same entry. When no
+// entry can answer the result has ModelUnavailable=true (nil error, rule 12).
 func (p *pi) Run(ctx context.Context, req Request, evidenceDir string) (*Result, error) {
 	if evidenceDir == "" {
 		return nil, errors.New("agent: evidence dir required")
@@ -268,35 +340,45 @@ func (p *pi) Run(ctx context.Context, req Request, evidenceDir string) (*Result,
 	sessionDir := filepath.Join(evidenceDir, "pi-session")
 	_ = os.MkdirAll(sessionDir, 0o755)
 	sessionID := fmt.Sprintf("%08x-%04x-4%03x-8%03x-%012x", start.Unix()&0xffffffff, os.Getpid()&0xffff, start.Nanosecond()&0xfff, len(req.FeatureID)&0xfff, start.UnixNano()&0xffffffffffff)
-	argv := sb.Argv(p.piArgvSession(sys, task, sessionDir, sessionID)...)
-	if b, err := json.MarshalIndent(argv, "", "  "); err == nil {
-		_ = os.WriteFile(filepath.Join(evidenceDir, FileArgv), b, 0o644)
-	}
 
 	attempts := p.cfg.Agent.Retries + 1
 	if attempts < 1 {
 		attempts = 1
 	}
 	var (
-		res     *Result
-		lastErr string
-		tr      *Transcript
+		res         *Result
+		lastErr     string
+		retryReason string // why the same entry is retried (logged before the backoff)
+		tr          *Transcript
+		spawns      int            // pi invocations of the main task, across models
+		tried       []ModelAttempt // one row per spawn
+		excluded    []string       // entries cooled down during this task (bounds switches to the chain length)
 	)
 	transcriptPath := filepath.Join(evidenceDir, FileTranscript)
-	for attempt := 1; attempt <= attempts; attempt++ {
+	entry, ok := p.chain.Next()
+	if !ok {
+		res = &Result{ModelUnavailable: true, Reason: "model unavailable: every chain entry is cooling down (" + strings.Join(p.chain.Names(), ", ") + ")"}
+	}
+	// attempt counts retries of the current entry; a model switch resets it (no backoff).
+	for attempt := 1; ok && attempt <= attempts; attempt++ {
 		if attempt > 1 {
 			wait := p.cfg.Agent.Backoff.Duration * time.Duration(attempt-1)
-			p.logger.Printf("model transient error (%s); retry %d/%d in %s", firstLine(lastErr), attempt, attempts, wait)
+			p.logger.Printf("agent: %s %s; retry %d/%d in %s (no alternative model)", entry.Name(), retryReason, attempt, attempts, wait)
 			select {
 			case <-time.After(wait):
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
 		}
+		argv := sb.Argv(p.piArgvSession(entry, sys, task, sessionDir, sessionID)...)
+		if b, err := json.MarshalIndent(argv, "", "  "); err == nil {
+			_ = os.WriteFile(filepath.Join(evidenceDir, FileArgv), b, 0o644)
+		}
+		spawns++
 		var stderr string
 		var timedOut, budgetHit bool
 		var err error
-		tr, stderr, timedOut, budgetHit, err = p.runOnce(ctx, argv, env, evidenceDir, transcriptPath, attempt, timeout, budget)
+		tr, stderr, timedOut, budgetHit, err = p.runOnce(ctx, argv, env, evidenceDir, transcriptPath, spawns, timeout, budget)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -316,7 +398,7 @@ func (p *pi) Run(ctx context.Context, req Request, evidenceDir string) (*Result,
 				break
 			}
 			p.logger.Printf("agent hit the tool budget (%d) on %s; continuation %d/%d with a fresh budget", budget, req.FeatureID, c, continuations)
-			ctr, _, ctimedOut, cbudgetHit, cerr := p.runOnce(ctx, sb.Argv(p.continueArgv(sys, sessionDir, sessionID, budget)...), env, evidenceDir, transcriptPath, attempt, timeout, budget)
+			ctr, _, ctimedOut, cbudgetHit, cerr := p.runOnce(ctx, sb.Argv(p.continueArgv(entry, sys, sessionDir, sessionID, budget)...), env, evidenceDir, transcriptPath, spawns, timeout, budget)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -336,7 +418,7 @@ func (p *pi) Run(ctx context.Context, req Request, evidenceDir string) (*Result,
 		if _, ok := ExtractResultBlock(text); !ok && (timedOut || budgetHit) {
 			// One bounded resume: no tools, answer from what was observed.
 			p.logger.Printf("agent %s (%s); resuming session once with WRAP UP", map[bool]string{true: "timed out", false: "hit the tool budget"}[timedOut], req.FeatureID)
-			wtr, _, _, _, werr := p.runOnce(ctx, sb.Argv(p.wrapUpArgv(sessionDir, sessionID)...), env, evidenceDir, transcriptPath, attempt, 4*time.Minute, 0)
+			wtr, _, _, _, werr := p.runOnce(ctx, sb.Argv(p.wrapUpArgv(entry, sessionDir, sessionID)...), env, evidenceDir, transcriptPath, spawns, 4*time.Minute, 0)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -350,18 +432,19 @@ func (p *pi) Run(ctx context.Context, req Request, evidenceDir string) (*Result,
 		}
 		if r, perr := ParseResult(text); perr == nil {
 			res = r
-			res.Attempts = attempt
 			res.Continuations = usedContinuations
 			if wrappedUp {
 				res.Reason = strings.TrimSpace("result produced after WRAP UP (timeout/tool budget); " + res.Reason)
 			}
 			if needsCompile(res) {
-				p.compileCandidates(ctx, sb, env, evidenceDir, transcriptPath, attempt, sessionDir, sessionID, res)
+				p.compileCandidates(ctx, sb, env, evidenceDir, transcriptPath, spawns, entry, sessionDir, sessionID, res)
 			}
+			tried = append(tried, ModelAttempt{entry.Name(), OutcomeOK})
 			break
 		} else if tr.AssistantText != "" && !budgetHit && !timedOut && tr.StopReason != "error" {
 			// The model answered but not in the contract shape: do not burn retries.
-			res = &Result{Decision: DecisionNeedsReview, Reason: perr.Error(), Evidence: truncate(tr.AssistantText, 4000), Attempts: attempt}
+			res = &Result{Decision: DecisionNeedsReview, Reason: perr.Error(), Evidence: truncate(tr.AssistantText, 4000)}
+			tried = append(tried, ModelAttempt{entry.Name(), OutcomeNoResult})
 			break
 		}
 		errText := strings.TrimSpace(strings.Join([]string{tr.ErrorMessage, stderr}, "\n"))
@@ -369,22 +452,50 @@ func (p *pi) Run(ctx context.Context, req Request, evidenceDir string) (*Result,
 			errText = err.Error()
 		}
 		lastErr = errText
+		kind, reason := providerErrorReason(errText)
 		switch {
 		case budgetHit:
-			res = &Result{Decision: DecisionNeedsReview, Reason: fmt.Sprintf("agent exceeded tool-call budget (%d)", budget), Attempts: attempt}
+			res = &Result{Decision: DecisionNeedsReview, Reason: fmt.Sprintf("agent exceeded tool-call budget (%d)", budget)}
+			tried = append(tried, ModelAttempt{entry.Name(), OutcomeBudget})
 		case timedOut:
-			res = &Result{Decision: DecisionNeedsReview, Reason: fmt.Sprintf("agent timed out after %s", timeout), Attempts: attempt}
-		case authRe.MatchString(errText) && !transientRe.MatchString(errText):
-			res = &Result{ModelUnavailable: true, Reason: "provider auth/quota error: " + firstLine(errText), Attempts: attempt}
-		case transientRe.MatchString(errText) || tr.StopReason == "error" || err != nil:
-			continue // retry
+			res = &Result{Decision: DecisionNeedsReview, Reason: fmt.Sprintf("agent timed out after %s", timeout)}
+			tried = append(tried, ModelAttempt{entry.Name(), OutcomeTimeout})
+		case kind != "":
+			tried = append(tried, ModelAttempt{entry.Name(), OutcomeUnavailable})
+			// Switch only when another entry is available right now.
+			if next, more := p.chain.Next(append(append([]string{}, excluded...), entry.Name())...); more {
+				p.chain.MarkUnavailable(entry.Name(), reason)
+				excluded = append(excluded, entry.Name())
+				p.logger.Printf("agent: %s unavailable (%s); switching to %s", entry.Name(), reason, next.Name())
+				entry = next
+				attempt = 0 // fresh retry budget for the new entry, no backoff on a switch
+				continue
+			}
+			// No alternative: a transient error retries this entry with backoff
+			// (agent.retries / agent.backoff); an auth/quota error is not retried.
+			if kind == "transient" && attempt < attempts {
+				retryReason = reason
+				continue
+			}
+			p.chain.MarkUnavailable(entry.Name(), reason)
+			res = &Result{ModelUnavailable: true, Reason: fmt.Sprintf("model unavailable: %s failed %d/%d attempt(s) and no alternative chain entry is available: %s", entry.Name(), attempt, attempts, firstLine(errText))}
+		case tr.StopReason == "error" || err != nil:
+			tried = append(tried, ModelAttempt{entry.Name(), OutcomeError})
+			retryReason = "error: " + firstLine(errText)
+			continue // retry the same entry after backoff
 		default:
-			res = &Result{Decision: DecisionNeedsReview, Reason: "agent produced no result block", Attempts: attempt}
+			res = &Result{Decision: DecisionNeedsReview, Reason: "agent produced no result block"}
+			tried = append(tried, ModelAttempt{entry.Name(), OutcomeNoResult})
 		}
 		break
 	}
 	if res == nil {
-		res = &Result{ModelUnavailable: true, Reason: "model unavailable after retries: " + firstLine(lastErr), Attempts: attempts}
+		res = &Result{ModelUnavailable: true, Reason: "model unavailable after retries: " + firstLine(lastErr)}
+	}
+	res.Attempts = spawns
+	res.ModelAttempts = tried
+	if !res.ModelUnavailable && spawns > 0 {
+		res.Model = entry.Name()
 	}
 	res.Duration = time.Since(start)
 	res.RawTranscriptPath = transcriptPath
@@ -459,14 +570,14 @@ func (p *pi) writeResult(dir string, res *Result) {
 	}
 }
 
-// piArgv is the exact pi invocation (no sandbox wrapper).
-func (p *pi) piArgv(systemPrompt, task string) []string {
-	return p.piArgvSession(systemPrompt, task, "", "")
+// piArgv is the exact pi invocation (no sandbox wrapper) for one chain entry.
+func (p *pi) piArgv(entry ModelEntry, systemPrompt, task string) []string {
+	return p.piArgvSession(entry, systemPrompt, task, "", "")
 }
 
 // piArgvSession persists the conversation under sessionDir/sessionID so a
 // timed-out task can be resumed once with a WRAP UP message (see wrapUpArgv).
-func (p *pi) piArgvSession(systemPrompt, task, sessionDir, sessionID string) []string {
+func (p *pi) piArgvSession(entry ModelEntry, systemPrompt, task, sessionDir, sessionID string) []string {
 	argv := []string{p.piPath, "-p", "--mode", "json"}
 	if sessionDir != "" && sessionID != "" {
 		argv = append(argv, "--session-dir", sessionDir, "--session-id", sessionID)
@@ -476,7 +587,7 @@ func (p *pi) piArgvSession(systemPrompt, task, sessionDir, sessionID string) []s
 	return append(argv,
 		"--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--approve",
 		"-e", p.extension, "--tools", p.tools,
-		"--provider", p.provider, "--model", p.model, "--thinking", p.cfg.Agent.Thinking,
+		"--provider", entry.Provider, "--model", entry.Model, "--thinking", entry.Thinking,
 		"--system-prompt", systemPrompt,
 		"--", task)
 }
@@ -489,9 +600,9 @@ const WrapUpMessage = "WRAP UP: the time/tool budget is exhausted. Do not call a
 const ContinueMessage = "CONTINUE: your tool budget has been renewed. Resume the task exactly where you stopped; do not repeat steps already completed. Prefer cheap commands (get text, wait --text, find) over full snapshots. When the flow is done or blocked, output the vigil-result block."
 
 // continueArgv resumes the persisted session with tools enabled (same extension) and a fresh budget.
-func (p *pi) continueArgv(systemPrompt, sessionDir, sessionID string, budget int) []string {
+func (p *pi) continueArgv(entry ModelEntry, systemPrompt, sessionDir, sessionID string, budget int) []string {
 	msg := ContinueMessage + fmt.Sprintf(" You have %d more tool calls.", budget)
-	return p.piArgvSession(systemPrompt, msg, sessionDir, sessionID)
+	return p.piArgvSession(entry, systemPrompt, msg, sessionDir, sessionID)
 }
 
 // CompileMessage asks for prose candidates to be rewritten as vigil DSL documents.
@@ -506,7 +617,7 @@ steps:
   - click: { by: text, text: "선생님" }
   - fill: { by: css, value: "input[placeholder*='검색']", input: "teacher01" }
   - click: { by: text, text: "입장" }
-  - expect_popup: { url_contains: lms-web, timeout: 30s }
+  - expect_popup: { url_contains: app, timeout: 30s }
   - wait_for: { by: text, text: "AI 학습관", timeout: 20s }
   - assert_text: { value: "학습 전" }
 assert: { no_http_5xx: true }
@@ -529,12 +640,12 @@ func needsCompile(res *Result) bool {
 
 // compileCandidates makes one cheap tool-less call to turn prose candidates into DSL;
 // on success the candidates are replaced and res.Compiled is set. Failure leaves res as is.
-func (p *pi) compileCandidates(ctx context.Context, sb *Sandbox, env []string, evidenceDir, transcriptPath string, attempt int, sessionDir, sessionID string, res *Result) {
+func (p *pi) compileCandidates(ctx context.Context, sb *Sandbox, env []string, evidenceDir, transcriptPath string, attempt int, entry ModelEntry, sessionDir, sessionID string, res *Result) {
 	p.logger.Printf("agent candidates are not DSL; asking the model to compile them")
 	argv := []string{p.piPath, "-p", "--mode", "json",
 		"--session-dir", sessionDir, "--session-id", sessionID,
 		"--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--approve", "--no-tools",
-		"--provider", p.provider, "--model", p.model, "--thinking", "low",
+		"--provider", entry.Provider, "--model", entry.Model, "--thinking", "low",
 		"--", CompileMessage}
 	ctr, _, _, _, err := p.runOnce(ctx, sb.Argv(argv...), env, evidenceDir, transcriptPath, attempt, 4*time.Minute, 0)
 	if err != nil || ctr == nil {
@@ -561,17 +672,19 @@ func (p *pi) compileCandidates(ctx context.Context, sb *Sandbox, env []string, e
 }
 
 // wrapUpArgv resumes the persisted session with tools disabled and low thinking.
-func (p *pi) wrapUpArgv(sessionDir, sessionID string) []string {
+func (p *pi) wrapUpArgv(entry ModelEntry, sessionDir, sessionID string) []string {
 	return []string{p.piPath, "-p", "--mode", "json",
 		"--session-dir", sessionDir, "--session-id", sessionID,
 		"--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--approve", "--no-tools",
-		"--provider", p.provider, "--model", p.model, "--thinking", "low",
+		"--provider", entry.Provider, "--model", entry.Model, "--thinking", "low",
 		"--", WrapUpMessage}
 }
 
 // env builds a minimal environment: an allowlist of the parent env (no stray
 // secrets), the mapped provider key, and agent-browser isolation settings.
-func (p *pi) env(session, evidenceDir string) []string {
+func (p *pi) env(session, evidenceDir string) []string { return agentEnv(p.cfg, session, evidenceDir) }
+
+func agentEnv(cfg *config.Config, session, evidenceDir string) []string {
 	keep := map[string]bool{"PATH": true, "HOME": true, "TMPDIR": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true, "TERM": true, "USER": true, "LOGNAME": true, "SHELL": true}
 	var env []string
 	for _, kv := range os.Environ() {
@@ -583,7 +696,7 @@ func (p *pi) env(session, evidenceDir string) []string {
 			env = append(env, kv)
 		}
 	}
-	for k, src := range p.cfg.Agent.EnvMap {
+	for k, src := range cfg.Agent.EnvMap {
 		v := os.Getenv(src)
 		if v == "" {
 			v = os.Getenv(k)

@@ -161,9 +161,9 @@ func TestSessionNameAndModelSplit(t *testing.T) {
 	if n != "vigil-training-entry-page-1700000000" {
 		t.Fatalf("session name = %s", n)
 	}
-	p, m := splitModel("zai/glm-5.3-flash")
-	if p != "zai" || m != "glm-5.3-flash" {
-		t.Fatalf("split = %s %s", p, m)
+	e, err := ParseModelEntry("glm-5.3-flash", "high")
+	if err != nil || e.Provider != "zai" || e.Model != "glm-5.3-flash" || e.Thinking != "high" {
+		t.Fatalf("legacy entry = %+v %v", e, err)
 	}
 }
 
@@ -171,8 +171,8 @@ func TestPiArgvShape(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agent.Thinking = "high"
 	cfg.Agent.MaxTurns = 5
-	p := &pi{cfg: cfg, piPath: "/x/bin/pi", provider: "zai", model: "glm-5.3-flash", extension: "/x/ext/index.js", tools: "agent_browser,read"}
-	argv := p.piArgv("SYS", "TASK")
+	p := &pi{cfg: cfg, piPath: "/x/bin/pi", extension: "/x/ext/index.js", tools: "agent_browser,read"}
+	argv := p.piArgv(ModelEntry{Provider: "zai", Model: "glm-5.3-flash", Thinking: "high"}, "SYS", "TASK")
 	joined := strings.Join(argv, " ")
 	for _, want := range []string{"-p --mode json", "--no-session", "--no-extensions", "-e /x/ext/index.js", "--tools agent_browser,read", "--provider zai --model glm-5.3-flash --thinking high", "--system-prompt SYS -- TASK"} {
 		if !strings.Contains(joined, want) {
@@ -347,12 +347,37 @@ func TestProjectSettingsRetry(t *testing.T) {
 }
 
 func TestParseResultSalvagesAlmostYAML(t *testing.T) {
-	text := "```yaml\nvigil-result:\n  decision: NEEDS_REVIEW\n  completion:\n    s1: partial: opened viewer\n  blocked_at:\n    url: https://a.example/v-web/index.html#/x\n```"
+	text := "```yaml\nvigil-result:\n  decision: NEEDS_REVIEW\n  completion:\n    s1: partial: opened viewer\n  blocked_at:\n    url: https://a.example/viewer/index.html#/x\n```"
 	r, err := ParseResult(text)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Decision != DecisionNeedsReview || !strings.Contains(r.Evidence, "blocked_at") || len(r.VisitedURLs) != 1 {
 		t.Fatalf("salvage failed: %+v", r)
+	}
+}
+
+func TestParseResultReproductionBlock(t *testing.T) {
+	text := "done\n```yaml vigil-result\ndecision: NEW_SCRIPT\nevidence: saw it\nscript_candidates:\n  - |\n    scenario:\n      id: x\nreproduction:\n  symptom: cart total keeps the old discount\n  reproduced: true\n  at_step: 4\n  note: total showed 9,000 after removing the item\n```\n"
+	r, err := ParseResult(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Reproduction == nil || !r.Reproduction.Reproduced || r.Reproduction.AtStep != 4 || r.Reproduction.Symptom != "cart total keeps the old discount" || r.Reproduction.Note == "" {
+		t.Fatalf("reproduction = %+v", r.Reproduction)
+	}
+	if strings.Contains(r.Evidence, "Additional fields") {
+		t.Fatalf("reproduction must be a contract field, got evidence %q", r.Evidence)
+	}
+	// a bare string is kept as the note instead of breaking the parse
+	r, err = ParseResult("```yaml vigil-result\ndecision: NEEDS_REVIEW\nevidence: e\nreproduction: could not reach the screen\n```")
+	if err != nil || r.Reproduction == nil || r.Reproduction.Note != "could not reach the screen" || r.Reproduction.Reproduced {
+		t.Fatalf("string reproduction: %+v %v", r.Reproduction, err)
+	}
+	if p := TaskPrompt(Request{Task: TaskReproduce, Summary: "s"}); !strings.Contains(p, "REPRODUCE the reported symptom") || !strings.Contains(p, "EXACTLY ONE scenario") {
+		t.Fatalf("reproduce prompt: %s", p)
+	}
+	if !strings.Contains(SystemPrompt(), "reproduction:") {
+		t.Fatal("system prompt must document the reproduction block")
 	}
 }

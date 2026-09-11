@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS features (
   routes TEXT NOT NULL DEFAULT '[]',
   summary TEXT NOT NULL DEFAULT '',
   source TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'ship',
+  ref TEXT NOT NULL DEFAULT '',
+  details TEXT NOT NULL DEFAULT '',
   readiness TEXT NOT NULL DEFAULT 'WAITING_FOR_DEPLOYMENT',
   ready_at INTEGER,
   last_handled_sha TEXT NOT NULL DEFAULT '',
@@ -57,6 +60,11 @@ CREATE TABLE IF NOT EXISTS scenarios (
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
   next_due_at INTEGER,
   origin TEXT NOT NULL DEFAULT '',
+  source_ref TEXT NOT NULL DEFAULT '',
+  source_kind TEXT NOT NULL DEFAULT '',
+  reproduction TEXT NOT NULL DEFAULT '',
+  cadence TEXT NOT NULL DEFAULT '',
+  approved_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (project_id, id)
@@ -165,7 +173,8 @@ CREATE TABLE IF NOT EXISTS runs (
   actual TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '',
   evidence_dir TEXT NOT NULL DEFAULT '',
-  deploy_marker TEXT NOT NULL DEFAULT ''
+  deploy_marker TEXT NOT NULL DEFAULT '',
+  environment TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_runs_scenario ON runs(scenario_id, started_at);
 CREATE INDEX IF NOT EXISTS ix_runs_outcome ON runs(project_id, outcome, started_at);
@@ -195,6 +204,22 @@ CREATE TABLE IF NOT EXISTS incidents (
   resolved_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_incidents_open ON incidents(project_id, state, kind);
+
+CREATE TABLE IF NOT EXISTS findings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  feature_id TEXT NOT NULL DEFAULT '',
+  scenario_id TEXT NOT NULL DEFAULT '',
+  job_id INTEGER NOT NULL DEFAULT 0,
+  kind TEXT NOT NULL,
+  where_ TEXT NOT NULL DEFAULT '',
+  expected TEXT NOT NULL DEFAULT '',
+  actual TEXT NOT NULL DEFAULT '',
+  evidence TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'OPEN',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_findings_open ON findings(project_id, state, scenario_id, feature_id);
 
 CREATE TABLE IF NOT EXISTS workers (
   id TEXT PRIMARY KEY,
@@ -233,3 +258,22 @@ CREATE TABLE IF NOT EXISTS budget_events (
 );
 CREATE INDEX IF NOT EXISTS ix_budget ON budget_events(project_id, kind, at);
 `
+
+// migration lists columns added after the first release; addColumnIfMissing
+// applies each one to databases created from an older schema.
+type migration struct {
+	table, column, ddl string
+}
+
+var migrations = []migration{
+	{"runs", "deploy_marker", "TEXT NOT NULL DEFAULT ''"},
+	{"runs", "environment", "TEXT NOT NULL DEFAULT ''"},
+	{"features", "kind", "TEXT NOT NULL DEFAULT 'ship'"},
+	{"features", "ref", "TEXT NOT NULL DEFAULT ''"},
+	{"features", "details", "TEXT NOT NULL DEFAULT ''"},
+	{"scenarios", "source_ref", "TEXT NOT NULL DEFAULT ''"},
+	{"scenarios", "source_kind", "TEXT NOT NULL DEFAULT ''"},
+	{"scenarios", "reproduction", "TEXT NOT NULL DEFAULT ''"},
+	{"scenarios", "cadence", "TEXT NOT NULL DEFAULT ''"},
+	{"scenarios", "approved_at", "INTEGER"},
+}

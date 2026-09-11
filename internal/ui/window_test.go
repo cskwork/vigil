@@ -120,6 +120,25 @@ func TestWindowPostRejectsInvalid(t *testing.T) {
 	}
 }
 
+// The window control is unauthenticated; a page on another origin must not be
+// able to switch cadence work off through the operator's browser.
+func TestWindowRejectsCrossOriginWrites(t *testing.T) {
+	s := newTestServer(t, businessHours())
+	for _, m := range []string{http.MethodPost, http.MethodDelete} {
+		r := httptest.NewRequest(m, "http://vigil.test/api/schedule/window", strings.NewReader(`{"enabled":false}`))
+		r.Header.Set("Origin", "http://evil.test")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, r)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s from another origin: status %d, want 403", m, rec.Code)
+		}
+	}
+	_, v := call(t, s, http.MethodGet, "")
+	if v == nil || !v.Enabled {
+		t.Fatal("cross-origin write must not change the window")
+	}
+}
+
 func TestWindowRejectsUnknownMethod(t *testing.T) {
 	s := newTestServer(t, businessHours())
 	rec, _ := call(t, s, http.MethodPatch, "")

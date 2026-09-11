@@ -49,6 +49,7 @@ func TestClassifyTable(t *testing.T) {
 		{"protocol on chromium", Input{Result: failed(runner.FailBrowserProtocol, ch, "fill", "websocket closed"), Browser: ch, TargetHealthy: true}, model.OutcomeEnvFailure},
 
 		{"transport", Input{Result: failed(runner.FailTransport, lp, "goto", "net::ERR_NAME_NOT_RESOLVED"), Browser: lp, TargetHealthy: false}, model.OutcomeEnvFailure},
+		{"goto outside env allowlist", Input{Result: failed(runner.FailEnvironment, lp, "goto", runner.ErrOutsideAllowlist), Browser: lp, TargetHealthy: true}, model.OutcomeEnvFailure},
 		{"auth", Input{Result: failed(runner.FailAuth, lp, "goto", "HTTP 401"), Browser: lp, TargetHealthy: true}, model.OutcomeAuthFailure},
 
 		{"timeout unhealthy", Input{Result: failed(runner.FailTimeout, lp, "wait_for", "run timeout"), Browser: lp, TargetHealthy: false}, model.OutcomeEnvFailure},
@@ -81,5 +82,31 @@ func TestIsEnvironmentWide(t *testing.T) {
 	}
 	if IsEnvironmentWide([]model.Outcome{model.OutcomeEnvFailure, model.OutcomeAppFailure, model.OutcomeScriptDrift}) {
 		t.Fatal("1 of 3 should not be environment-wide")
+	}
+}
+
+// A wait_url that fails on Lightpanda is not evidence of a stale script: that engine cannot
+// see a window.open target, so it reports the same thing whether the app navigated to a new
+// tab or did nothing at all. Chromium must answer that before an agent repairs anything.
+func TestNavigationFailureOnLightpandaAsksChromium(t *testing.T) {
+	res := func(class runner.FailureClass) *runner.Result {
+		return &runner.Result{Class: class, Browser: model.BrowserLightpanda,
+			FailedStep: &runner.StepResult{Kind: "wait_url"}}
+	}
+	got, why := Classify(Input{Result: res(runner.FailNavigation), TargetHealthy: true})
+	if got != model.OutcomeBrowserAmbiguous {
+		t.Fatalf("lightpanda navigation failure = %s (%s), want BROWSER_AMBIGUOUS", got, why)
+	}
+
+	// A locator failure is not popup-shaped; it stays a script problem.
+	if got, _ := Classify(Input{Result: res(runner.FailLocator), TargetHealthy: true}); got != model.OutcomeScriptDrift {
+		t.Fatalf("lightpanda locator failure = %s, want SCRIPT_DRIFT", got)
+	}
+
+	// On Chromium the observation is trustworthy, so the script really is stale.
+	ch := res(runner.FailNavigation)
+	ch.Browser = model.BrowserChromium
+	if got, _ := Classify(Input{Result: ch, TargetHealthy: true}); got != model.OutcomeScriptDrift {
+		t.Fatalf("chromium navigation failure = %s, want SCRIPT_DRIFT", got)
 	}
 }

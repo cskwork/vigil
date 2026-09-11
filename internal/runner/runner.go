@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,14 @@ type Runner struct {
 
 	mu      sync.Mutex
 	handles map[model.Browser]*browserHandle
+	use     map[model.Browser]*browserUse
+}
+
+// browserUse tracks how busy one browser kind is, so an idle one can be shut
+// down without ever pulling a page out from under a run.
+type browserUse struct {
+	active  int       // runs currently holding a page
+	lastUse time.Time // when the last run released its page (or last failed to open one)
 }
 
 // browserHandle is a cached connection for browsers that support multiple tabs.
@@ -44,7 +53,58 @@ type browserHandle struct {
 }
 
 func New(providers map[model.Browser]browser.Provider) *Runner {
-	return &Runner{providers: providers, handles: map[model.Browser]*browserHandle{}}
+	return &Runner{providers: providers, handles: map[model.Browser]*browserHandle{}, use: map[model.Browser]*browserUse{}}
+}
+
+// acquire marks a run as holding a page on kind; the returned func releases it.
+func (r *Runner) acquire(kind model.Browser) func() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u := r.use[kind]
+	if u == nil {
+		u = &browserUse{}
+		r.use[kind] = u
+	}
+	u.active++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.mu.Lock()
+			u.active--
+			u.lastUse = time.Now()
+			r.mu.Unlock()
+		})
+	}
+}
+
+// StopIdle shuts down every launched browser that has had no run for at least
+// idle and is not serving one now, dropping its cached connection so the next
+// run relaunches cleanly. It returns the kinds it stopped.
+func (r *Runner) StopIdle(idle time.Duration) []model.Browser {
+	var stopped []model.Browser
+	for kind, p := range r.providers {
+		if p == nil || !p.Running() {
+			continue
+		}
+		r.mu.Lock()
+		u := r.use[kind]
+		busy := u != nil && (u.active > 0 || time.Since(u.lastUse) < idle)
+		var h *browserHandle
+		if !busy {
+			h = r.handles[kind]
+			delete(r.handles, kind)
+		}
+		r.mu.Unlock()
+		if busy {
+			continue
+		}
+		if h != nil && h.cancel != nil {
+			h.cancel()
+		}
+		_ = p.Stop()
+		stopped = append(stopped, kind)
+	}
+	return stopped
 }
 
 // Close releases cached browser connections. Providers are stopped by their owner.
@@ -77,13 +137,17 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Browser == "" {
 		spec.Browser = model.BrowserLightpanda
 	}
-	provider, ok := r.providers[spec.Browser]
-	if !ok || provider == nil {
-		return nil, fmt.Errorf("runner: no provider for browser %q", spec.Browser)
-	}
 	steps, err := flatten(spec.Scenario, spec.Flows)
 	if err != nil {
 		return nil, err
+	}
+	// environment validation needs no browser: refuse before a provider is required
+	if res := envRejects(spec, steps); res != nil {
+		return res, nil
+	}
+	provider, ok := r.providers[spec.Browser]
+	if !ok || provider == nil {
+		return nil, fmt.Errorf("runner: no provider for browser %q", spec.Browser)
 	}
 	if spec.StepTimeout <= 0 {
 		spec.StepTimeout = defaultStepTimeout
@@ -116,6 +180,8 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (*Result, error) {
 		runCtx: runCtx,
 	}
 
+	release := r.acquire(spec.Browser)
+	defer release()
 	pageCtx, cleanup, err := r.openPage(runCtx, provider, s.cap)
 	if err != nil {
 		res.Class = FailTransport
@@ -267,4 +333,25 @@ func runWithTimeout(ctx, runCtx context.Context, timeout time.Duration) error {
 	case <-runCtx.Done():
 		return runCtx.Err()
 	}
+}
+
+// envRejects validates every static goto against the environment allowlist
+// before a browser is launched. A violation is an environment failure of the
+// run, reported on the offending step.
+func envRejects(spec Spec, steps []flatStep) *Result {
+	for i, st := range steps {
+		if st.Step.Goto == "" {
+			continue
+		}
+		u, err := resolveURL(spec.BaseURL, st.Step.Goto)
+		if err != nil || urlAllowed(spec.AllowedHosts, u) {
+			continue
+		}
+		now := time.Now()
+		fs := &StepResult{Index: i + 1, Kind: "goto", Name: st.Name, Expected: "host in " + strings.Join(spec.AllowedHosts, ","), Actual: u,
+			Error: fmt.Sprintf("goto %s: %s (%s)", u, ErrOutsideAllowlist, spec.Environment), Class: FailEnvironment}
+		return &Result{Passed: false, Class: FailEnvironment, Browser: spec.Browser, StartedAt: now, FinishedAt: now, FailedStep: fs,
+			Steps: []StepResult{*fs}, Error: fs.Error, Artifacts: map[string]string{}, Capabilities: map[string]bool{}}
+	}
+	return nil
 }

@@ -90,11 +90,15 @@ cp vigil.example.yaml vigil.yaml         # point target.base_url at your app
 ./vigil loop --ui 127.0.0.1:8787         # scheduler + live dashboard
 ```
 
-The dashboard at `:8787` shows verification results, running jobs, the
-coverage-growth panel and the schedule window. Its main page also has one text
-box for an operator to describe a QA situation. Vigil forces these submissions
-to `read-only` and gives them priority 110, above repair and recent-failure work
-at priority 100.
+The dashboard at `:8787` has five pages: `/` (할 일) is an action queue of the
+things that need a person, `/results` (검증 결과) is today's verification matrix
+grouped by outcome plus the deploy history, `/scripts` (검사 스크립트) lists the
+scripts with inline run/approve/reject actions, `/activity` (시스템 활동) shows
+running jobs, the coverage-growth panel and the schedule window, and `/help`
+(도움말) explains every state and outcome word with the equivalent CLI command.
+The action queue also has one text box for an operator to describe a QA
+situation. Vigil forces these submissions to `read-only` and gives them priority
+110, above repair and recent-failure work at priority 100.
 
 If the same `loop --ui` process is running another Browser Agent job, it cancels
 that job cooperatively, returns it to `READY` without charging an attempt or
@@ -106,7 +110,21 @@ deduplication, oracle, and SOAK gates.
 Dashboard controls are unauthenticated. Bind `loop --ui` and `serve` only to a
 trusted address such as `127.0.0.1`. Standalone `serve` shows the QA box but
 keeps submission disabled; use `loop --ui` with an available Browser Agent to
-submit a request.
+submit a request. Writes are additionally refused from any other origin.
+
+Browsers the loop launches are shut down after `browser.idle_stop` (default
+10m) without a run and relaunched on demand, so a resident Chromium and
+Lightpanda do not hold several hundred MB overnight. The Browser Agent's own
+Chrome closes with its session at the end of each agent job.
+
+The dashboard polls with content ETags: an unchanged payload costs a 304 and
+the page skips its re-render, so open panels and selections survive polling.
+The landing page needs one poll (`GET /api/todo`). It follows the system
+light/dark scheme (switchable in the rail), the verification list groups and
+filters by outcome (`/results?outcome=APP_FAILURE`), the script list filters by
+state (`/scripts?state=PENDING_APPROVAL`), long lists page with `더 보기`, and
+every control is keyboard reachable behind a skip link. `serve --dev-ui internal/ui` serves the pages from disk so they can
+be edited without a rebuild (see ADR-0002).
 
 ## Status
 
@@ -160,7 +178,7 @@ Git ship/change
 | Package | Responsibility |
 |---|---|
 | `cmd/vigil` | CLI: global flags, command dispatch, `doctor` checks |
-| `internal/ingest` | Turns `generic-git`, `file` and `sdlc-kit` signals into normalized `FeatureEvent`s |
+| `internal/ingest` | Turns `generic-git`, `file`, `sdlc-kit`, `jira`, `loki` and `exec` signals into normalized `FeatureEvent`s (multi-adapter poll) |
 | `internal/gate` | Deployment readiness gate (`delay`, `asset_version`, `version_endpoint`) |
 | `internal/orchestrator` | Decision table, impact selection, post-run lifecycle (soak/promote, quarantine, repair, Chromium confirm, incidents), agent job handling, coverage supervisor (plan → validate → apply, stale-review reconcile) |
 | `internal/scheduler` | Continuous loop: scan/gate/orchestrate, due selection, budgets, locks, workers, cheap retry, PASS marker |
@@ -170,7 +188,10 @@ Git ship/change
 | `internal/dsl` | Scenario/flow schema, validator, logical fingerprint |
 | `internal/evidence` | Run directories, PASS marker, portable incidents, retention prune |
 | `internal/store` | SQLite (WAL) state: features, scenarios, versions, jobs, runs, incidents, locks, budget |
-| `internal/agent` | pi Browser Agent adapter, task contract, secret redaction, nono sandbox |
+| `internal/agent` | pi Browser Agent adapter, model fallback chain, task contract, secret redaction, nono sandbox |
+| `internal/approval` | `PENDING_APPROVAL` → ACTIVE/SOAK transitions, receipts, approval comment body |
+| `internal/jira` | Approval comments through `acli`, with read-back verification and a dry-run file |
+| `internal/export` | Playwright spec generation from the canonical DSL |
 | `internal/config` | `vigil.yaml` + `url.md` loading, defaults, `${ENV}` substitution |
 | `internal/model` | States, outcomes, actions, job kinds, priorities, entities |
 
@@ -186,6 +207,8 @@ go build ./cmd/vigil
 ./vigil add                         # register project, import scenarios/ + flows/ into the store
 ./vigil scan                        # ingest features once, gate, orchestrate
 ./vigil run home-landing  # one scenario now
+./vigil findings                    # data-analyst findings the agent reported
+./vigil export --all                # Playwright specs under export/playwright/
 ./vigil loop                        # continuous scheduler + workers until SIGINT
 ```
 
@@ -218,9 +241,10 @@ Then:
 | `init` | Write a starter `vigil.yaml` and `url.md` next to it (only if missing); create `scenarios/`, `flows/`, `features/` |
 | `add [project]` | Upsert the project (must equal `project.id`) and import `scenarios/` + `flows/` from disk (seeds enter SOAK) |
 | `import --history [--limit N]` | Ingest the last `discovery.history_limit` (or N) historical features; no gate, no plan |
-| `scan` | Import files, poll the discovery adapter once, gate unhandled features, orchestrate READY ones, print feature table |
+| `scan` | Import files, poll every `discovery.adapters` source once, gate unhandled features, orchestrate READY ones, print the feature table (with KIND / REF) |
 | `discover <feature>` | Enqueue an `AGENT_DISCOVER` job for a known feature and run it inline (requires the Browser Agent) |
-| `run <scenario\|feature> [--browser lightpanda\|chromium]` | Run one scenario inline; a feature id runs every ACTIVE/SOAK scenario linked to it |
+| `reproduce <feature> [--dry-run] [--no-repair] [--fresh]` | Same, for a known issue/log feature: when the feature already has a `CANDIDATE` script with a queued repair, resume that repair instead of starting over (`--fresh` forces a new reproduce job); enqueue `AGENT_REPRODUCE` at operator priority (budget bypass) and run it inline, then run the follow-up `AGENT_REPAIR` jobs inline until the script leaves `CANDIDATE` (`PENDING_APPROVAL` / `NEEDS_REVIEW`) or `policy.agent_fix_attempts` is spent; `--no-repair` stops after the reproduce job; `--dry-run` writes the request and prompt without calling the model. Ship features are refused (use `discover`) |
+| `run <scenario\|feature> [--browser lightpanda\|chromium] [--env <name>]` | Run one scenario inline; a feature id runs every ACTIVE/SOAK scenario linked to it. `--env` picks a `target.environments` entry (default: `target.default_env`) |
 | `run --feature <f>` | Run every ACTIVE/SOAK scenario with a `feature` coverage link to `f` |
 | `run --impacted <f>` | Run scenarios impacted by `f` (feature, then capability via `route_map`, route, path links) |
 | `run --all` | Run every ACTIVE/SOAK scenario |
@@ -228,17 +252,264 @@ Then:
 | `status` | Scenario/job counts, last-hour budget, features, queue, next due, recent runs, open incidents |
 | `coverage` | Per-scenario coverage links, metrics and corpus health (duplicate fingerprints, quarantined, never run, needs review, flakiest) |
 | `incidents [--all] [--limit N]` | Open (or all) incidents with Markdown paths |
-| `approve <scenario>` | NEEDS_REVIEW / CANDIDATE / QUARANTINED / REJECTED to SOAK; soak counter and failures reset; due now |
+| `findings [--all] [--limit N]` | Open (or all) data-analyst findings reported by the agent (`--limit` default 50) |
+| `findings resolve <id>` | Mark one finding RESOLVED |
+| `approve [--soak] <scenario>` | `PENDING_APPROVAL` to ACTIVE with `cadence: daily` (next due at `schedule.daily_at`, Jira comment on the source issue); every other approvable state — or `--soak` — to SOAK, counters reset, due now |
 | `reject <scenario>` | Any state to REJECTED; resolves its open APP_REGRESSION incidents |
 | `list [--state A,B]` | List scenarios, optionally filtered by comma-separated states |
 | `show <scenario>` | Current script YAML, coverage links, metrics, last 10 runs |
+| `export <scenario>\|--all [--format playwright] [--env <name>] [-o <dir>]` | Write `<dir>/<id>.spec.ts` (default `export/playwright`); `--all` exports every ACTIVE / SOAK / PENDING_APPROVAL / NEEDS_REVIEW script |
 | `validate` | Parse and validate every scenario/flow file; flags duplicate ids and duplicate fingerprints; exit 1 on problems |
 | `serve [--addr 127.0.0.1:8787]` | Standalone live web view for non-developers. QA submission stays disabled because no in-process scheduler owns the request; existing schedule controls remain available |
 | `loop --ui <addr>` | `loop` plus the live view and one-box, read-only QA submission. An available Browser Agent is required |
 | `request <file.yaml> [--queue] [--dry-run]` | Hand a manual QA request to the orchestrator: `feature_id`, `summary`, `entry_url`, `accounts` (named test accounts, no secrets), `instructions` (the flow in plain language), `mutation` (read-only / reversible / destructive), `locks`, `max_tool_calls`, `timeout_minutes`. The Browser Agent performs the flow with one isolated browser session per role (`"session":"teacher"`) and proposes scripts; `--queue` leaves it for a running loop |
-| `doctor [--install]` | Check config/targets, sqlite, evidence dir, repo/branch, Lightpanda binary + serve, Chromium, pi, API keys, extension, nono, agent, target HTTP, asset marker |
+| `doctor [--install]` | Check config/targets, sqlite, evidence dir, repo/branch, Lightpanda binary + serve, Chromium, pi, API keys, extension, nono, agent, target HTTP, one asset marker line per environment (`asset marker <env>`) |
 
-`run` exits 1 when any scenario did not PASS. `doctor` exits 1 only on hard failures (sqlite, evidence dir, repo, target).
+`run` exits 1 when any scenario did not PASS and 2 on a usage error, an unknown `--env`, or a mutating scenario sent to a read-only environment. `doctor` exits 1 only on hard failures (sqlite, evidence dir, repo, target).
+
+## Sources: Jira, logs, commands
+
+A ship (git commit, sdlc-kit item, feature file) is not the only reason to test
+something. `discovery.adapters` polls several sources together; each honours its
+own `poll_interval` while the scheduler keeps calling on `discovery.poll_interval`.
+An adapter that errors is logged and skipped, never fatal.
+
+| Adapter | Reads | Feature id | Kind |
+|---|---|---|---|
+| `generic-git`, `sdlc-kit`, `file` | shipped changes (as before) | `PROJ-123` / `commit-<sha>` / file id | `ship` |
+| `jira` | `acli jira workitem search --jql ... --json --limit N --fields key,summary,description,status,labels,issuetype`; ADF descriptions are flattened to text | `<KEY>` upper-cased | `issue` |
+| `loki` | Grafana `POST <base>/api/ds/query` (basic auth from `email_env`/`password_env`, read at call time), one event per error signature reaching `min_count` lines in `window` | `log-<8 hex of sha1(signature)>` | `log` |
+| `exec` | stdout of `discovery.exec.command`: a JSON array of `{key, summary, details, at, routes, kind}` (see `examples/exec-events.example.json`) | `exec-<key>` sanitised | `issue` \| `log` (default `log`) |
+
+Every feature carries `kind` (`ship` \| `issue` \| `log`), `ref` (issue key, log
+signature hash, exec key) and `details` (bounded to 8 KB: the description, the
+sample log lines, or the exec `details`). `scan` and `status` print KIND and REF
+next to the feature id.
+
+The Loki signature is the first match of `discovery.loki.signature` in the line —
+or, when a promtail line is itself JSON with a `message` key, in that message —
+normalised so one incident is one signature: URLs become `<url>`, UUIDs `<uuid>`,
+hex ids `<hex>`, numbers `#`, whitespace collapses, and the result is bounded to
+160 characters. Signatures are ranked by line count and the top
+`max_events_per_poll` become features.
+
+Nothing here waits for a deployment: **issue and log features are `READY` the
+moment they are ingested**, `ReadyAt = now`. Each one is ingested once per
+content hash / hour bucket, so an unchanged issue or a still-firing log
+signature does not re-enter the queue every poll.
+
+## Reproduce and approve
+
+For a non-ship feature the orchestrator decides `REPRODUCE` and enqueues
+`AGENT_REPRODUCE` (priority 90). The agent is asked to reproduce the reported
+symptom on the deployed app and to write **one** scenario that encodes the
+expected behaviour from the report (`oracle.source: spec`,
+`oracle.source_feature: <ref>`), then to refine until the flow either reaches the
+symptom or proves the expectation holds. Its result carries
+`reproduction: {symptom, reproduced, at_step, note}`.
+
+`vigil reproduce <feature-id> [--dry-run]` does the same for one known issue/log
+feature right now, inline, the way `discover` does for ship features.
+
+The candidate is then validated by the deterministic runner, and the verdict
+decides the state:
+
+| Validation outcome | Result |
+|---|---|
+| `PASS` or `APP_FAILURE` | `PENDING_APPROVAL`, with `{verdict, reproduced, at_step, claimed_step, symptom, why, run_id}` stored on the script |
+| `SCRIPT_DRIFT` and other script problems | the existing repair loop (`policy.agent_fix_attempts`), exhausted → `NEEDS_REVIEW` |
+
+An `APP_FAILURE` alone is not a reproduction: a script that asserts an exact
+number (`expected 40, got 37`) fails on a healthy page too. The run is
+corroborated with the agent's own block into a three-way verdict, and all three
+wait for a human:
+
+| Verdict | Badge | When |
+|---|---|---|
+| `confirmed` | `재현됨` | `APP_FAILURE`, the agent claims `reproduced: true`, and its `at_step` is within ±1 of the failed step **or** it filed a finding on the same route |
+| `disputed` | `판정 불일치` | `APP_FAILURE` but the agent disagrees (claims `reproduced: false`, or another step with no corroborating finding); `why` names the disagreement |
+| `unconfirmed` | `재현 안 됨` | `PASS` (the expected behaviour held), or no agent block to corroborate the failure |
+
+Because of that, the agent is told to assert **bounds** as booleans — `eval: {
+script: "…value.length <= 40", expect: true }`, `assert_count` with `max:`/`min:`
+over `equals:`, `assert_data` with `compare: number` against an API value — and
+to assert an exact value only when the specification fixes it.
+
+`PENDING_APPROVAL` (Korean label `승인 대기`) is never due. Running such a script
+by hand — CLI or dashboard — records the run and its metrics and changes nothing
+else: no state transition, no incident, no repair job. That is on purpose: a
+reviewer can re-run a pending script as often as they like.
+
+```bash
+vigil list --state PENDING_APPROVAL
+vigil run entry-tabs-duplicated          # judge it, as often as you like
+vigil approve entry-tabs-duplicated      # → ACTIVE, cadence daily, Jira comment
+vigil reject entry-tabs-duplicated       # → REJECTED
+```
+
+`approve` sets `cadence: daily` and the next due to the next `schedule.daily_at`
+slot (in `schedule.active_hours.tz`, else machine local), resets the soak and
+failure counters, and stamps `approved_at`. `approve --soak` forces the ordinary
+SOAK path instead. Post-deploy impacted runs still pick up ACTIVE daily scripts.
+
+When the script came from a Jira issue (`source_kind: issue` and a `source_ref`
+matching `discovery.issue_key_pattern`) and `jira.comment_on_approve` is true,
+approval posts a Korean receipt (≤ 12 lines: how to re-run it, the last outcome
+with environment and time, the reproduction verdict, the findings count and the
+top 3, the daily slot, the evidence path) with `jira.cli` and then **reads the
+comments back**, because acli writes have been seen to report success without
+effect. `jira.dry_run: true` writes the same body to
+`evidence/jira/<KEY>-<ts>.md` instead. A failed comment never undoes the
+approval; it is logged and shown in the receipt.
+
+In the dashboard, `PENDING_APPROVAL` and `NEEDS_REVIEW` cards carry
+`▶ 실행 / ✔ 승인 / ✖ 반려` with an environment select (default env plus the others)
+and a browser select (lightpanda / chromium), plus the reproduction badge
+(`재현됨` / `판정 불일치` / `재현 안 됨`, with `why` as its sub-line). They call `POST /api/script/{run,approve,reject}`, JSON
+in and out, same-origin only. `loop --ui` provides all three; standalone `serve`
+approves and rejects through the store but answers 409 for run — it has no
+scheduler.
+
+## Environments
+
+```yaml
+target:
+  default_env: stg
+  environments:
+    stg:
+      base_url: https://stg.example.com
+      allowed_hosts: [stg.example.com]
+      asset_page: https://stg.example.com/app     # optional
+      read_only: false
+    prod:
+      base_url: https://www.example.com
+      allowed_hosts: [example.com]
+      read_only: true
+```
+
+With no `environments` block, one implicit environment named `default` is
+synthesised from `target.base_url` / `allowed_hosts`: existing configs behave
+exactly as before.
+
+- `run <id|--all|--feature|--impacted> --env prod` takes the base URL and the host
+  allowlist from that environment. `goto: /path` resolves against its base URL;
+  an absolute `goto` outside its allowlist fails that run with `ENV_FAILURE`
+  ("url outside environment allowlist").
+- `read_only: true` refuses every scenario whose `mutation` is not `read-only`:
+  CLI exit 2, dashboard HTTP 400, job → FAILED with the reason.
+- Runs record their environment (`runs.environment`, `result.json`, incident
+  markdown/json); the verification table shows an environment badge and the run
+  detail names it.
+- Agent work (discover / verify / repair / reproduce) and all cadence, soak and
+  impacted scheduling stay on the default environment. Multi-environment
+  scheduling is out of scope: nothing runs a scenario on two environments by
+  itself.
+- Deploy markers are per environment: a run is tagged with the marker of the
+  environment it ran against (`<name>.asset_page`, else that environment's
+  `base_url` + entry path, else `deployment.readiness.asset_page` for the
+  default environment), and the per-deploy Chromium evidence capture dedups per
+  (scenario, environment, marker). `doctor` prints one marker line per
+  environment.
+
+## Model chain
+
+```yaml
+agent:
+  models:                        # ordered; entry = provider/model[:thinking]
+    - openai-codex/gpt-5.6-luna:low
+    - anthropic/claude-haiku-4-5:low
+    - zai/glm-5.3-flash:high
+    - google/gemini-2.5-flash:low
+  model_cooldown: 10m
+```
+
+Each attempt uses the current chain entry. When one answers with a provider
+error (429, quota, auth, 5xx, "rate limit") **and another entry is available**,
+that entry is put on cooldown for `model_cooldown`, the next one starts
+immediately with a fresh retry budget and no backoff, and the loop logs
+`agent: <model> unavailable (<reason>); switching to <next>`. With no
+alternative the legacy behaviour is unchanged: a transient error retries the
+same model `agent.retries` times with `agent.backoff`; an auth/quota error is
+not retried. When every entry is cooling down the task ends model-unavailable
+and deterministic QA continues (rule 12). An entry without `:thinking` inherits
+`agent.thinking`; `agent.models` empty means the single legacy `agent.model`.
+
+`agent-result.json` records `model` (the entry that produced the result) and
+`model_attempts` (`{model, outcome}` per spawn; outcome `ok`, `unavailable`,
+`error`, `timeout`, `budget` or `no_result`). `vigil doctor` prints one line per
+chain entry from `pi auth check --provider <p> --json --no-refresh` and only
+*warns* when an entry is not ready — the chain skips it. Cooldowns live in
+memory, per process.
+
+## Data checks and findings
+
+A QA script can compare what the screen shows with the payload that produced it:
+
+```yaml
+- assert_data:
+    ui: { by: css, value: ".total-count" }
+    ui_regex: '\d+'                       # optional; first match (group 1 when present)
+    api: { url_contains: /api/students, json_path: $.data.totalCount, method: GET }
+    compare: number                       # text | number | contains
+```
+
+The step reads `innerText` of `ui`, takes the last captured response whose URL
+contains `api.url_contains` (and method, when given), resolves `json_path`
+(`$`, `.key`, `["key with spaces"]`, `[N]`, `[*]` = first element; no external
+dependency) and compares: `text` trimmed, `number` numerically, `contains` = the
+UI text contains the API value. A mismatch is a business assertion, so it
+classifies as `APP_FAILURE` with both values and their sources in
+expected/actual. `assert_data` counts as a major action in the fingerprint.
+
+The Browser Agent has matching data-analyst duties — displayed values vs. the
+API payloads behind them, totals vs. row sums, counts vs. list lengths,
+dates/units/locale, empty vs. zero, stale data after an action — and reports each
+as a **finding**: `{kind: data_mismatch | domain_rule | display | accessibility,
+where, expected, actual, evidence}`. Findings are persisted (`findings` table,
+`OPEN` / `RESOLVED`), listed by `vigil findings [--all] [--limit N]`, closed with
+`vigil findings resolve <id>`, shown as a panel on the dashboard script detail
+with a count on the verification page, and summarised in the approval comment.
+
+`agent.domain_file` (a markdown file, relative to the config, bounded to 12 KB
+and truncated with a marker) is injected into every task prompt as "Domain
+rules"; the agent must obey them and cite the rule id in a finding.
+`examples/domain.example.md` is a starting point — give every rule an id.
+
+## Playwright export
+
+```bash
+vigil export entry-tabs-duplicated            # → export/playwright/entry-tabs-duplicated.spec.ts
+vigil export --all --env prod -o /tmp/pw
+```
+
+The YAML DSL stays canonical; the spec is derived output and says so in its
+header, together with the scenario id, the version currently in the store, the
+environment and its base URL. `BASE_URL` in the shell overrides the exported base
+URL at run time. `--all` exports every ACTIVE / SOAK / PENDING_APPROVAL /
+NEEDS_REVIEW script.
+
+| DSL | Playwright |
+|---|---|
+| `goto` | `page.goto(BASE_URL + '/path')` |
+| `click`, `hover`, `fill`, `type`, `press`, `select` | locator API (`.click()`, `.fill()`, `.selectOption()`, …) |
+| `wait_for` / `assert_visible` / `assert_not_visible` | `expect(loc).toBeVisible()` / `.not.toBeVisible()` |
+| `wait_ms` | `page.waitForTimeout(n)` |
+| `wait_url`, `assert_url` | `expect(page).toHaveURL(RegExp)` |
+| `assert_text`, `assert_no_text` | `toContainText` / `not.toContainText` on the scope (body by default) |
+| `assert_count` | `toHaveCount`, or `count()` bounds for `min`/`max` |
+| `assert_request` | `page.waitForResponse(predicate)` |
+| `assert_attr` | `toHaveAttribute` |
+| `assert_data` | `waitForResponse` + JSON path + `expect` |
+| `expect_popup` | `context.waitForEvent('page')` |
+| `eval`, `screenshot` | `page.evaluate`, `page.screenshot` |
+| `uses` / `use_flow` | inlined, with the flow named in a step comment |
+| Locators | `test_id`→`getByTestId`, `role`→`getByRole(role,{name,exact})`, `label`→`getByLabel`/`getByPlaceholder`, `id`→`#id`, `text`→`getByText`, `href`→`locator('a[href*=..]')`, `css`→`locator`; `nth` → `.nth(n)` |
+| Scenario `assert` flags | listeners collected during the test (console errors, 5xx, 4xx on named URLs) and checked at the end |
+
+Anything the exporter cannot map exactly — a missing locator, an unknown `by`, a
+role `getByRole` does not know, an invalid timeout, an unsupported step kind or
+`compare` mode — becomes a `// TODO test.fixme:` comment next to the closest
+approximation. The output is always valid TypeScript.
 
 ## Config reference
 
@@ -259,6 +530,11 @@ Then:
 | `target.base_url` | derived | Origin of the primary URL when empty; required otherwise |
 | `target.allowed_hosts` | derived | Primary host is appended when not already allowed; match is exact or subdomain suffix |
 | `target.url_file` | `url.md` when present | One URL per line, `<label> \| <url>` or bare `<url>`, `#` comments |
+| `target.default_env` | `default` (or the only configured environment) | Environment used by every run that does not pass `--env`; required when several are configured |
+| `target.environments.<name>.base_url` | required | Absolute http(s) URL of that deployment |
+| `target.environments.<name>.allowed_hosts` | host of `base_url` | Host allowlist for runs on that environment |
+| `target.environments.<name>.asset_page` | `base_url` + entry path (default env: `deployment.readiness.asset_page`) | Page whose `assets/index.js?v=<n>` marker tags runs on that environment; validated against the allowlist |
+| `target.environments.<name>.read_only` | `false` | Refuse every scenario whose `mutation` is not `read-only` |
 
 The first URL is the primary target: origin becomes `base_url`, host is allowlisted, and its path (`EntryPath`) is the default entry route for the asset probe and agent discovery. Extra lines are additional routes the agent may explore.
 
@@ -275,6 +551,23 @@ The first URL is the primary target: origin becomes `base_url`, host is allowlis
 | `features_dir` | `features` | `file` adapter: directory of `FeatureEvent` YAML files |
 | `poll_interval` | `60s` | Loop poll cadence |
 | `history_limit` | `5` | `import --history` and first-poll window |
+| `adapters` | | Sources polled together (`generic-git`, `sdlc-kit`, `file`, `jira`, `loki`, `exec`); replaces `adapter` when set |
+| `jira.cli` | `acli` | Binary used for `jira workitem search` |
+| `jira.jql` | required with the adapter | JQL of the issues to watch |
+| `jira.limit` | `20` | Issues per poll |
+| `jira.poll_interval` | `10m` | |
+| `jira.route_hints` | | `[{match, route}]`; case-insensitive substring of summary+description → entry route |
+| `loki.base_url` | required with the adapter | Grafana root or full `/api/ds/query` URL |
+| `loki.datasource_uid` | required with the adapter | Loki datasource uid |
+| `loki.email_env` / `.password_env` | required with the adapter | **Names** of the env vars holding basic-auth credentials; read at call time, never stored |
+| `loki.expr` | required with the adapter | LogQL selector |
+| `loki.window` / `.poll_interval` | `1h` / `15m` | Query window and poll cadence |
+| `loki.min_count` | `3` | Lines of one signature in the window before it becomes an event |
+| `loki.max_lines` | `500` | `maxLines` sent to Grafana |
+| `loki.max_events_per_poll` | `5` | Keep the top-N signatures by line count |
+| `loki.signature` | `(?i)(exception\|error)[^\n]{0,120}` | First match = signature; the fallback is the first line, always normalised |
+| `exec.command` | required with the adapter | Argv printing a JSON array of events |
+| `exec.poll_interval` / `.timeout` | `15m` / `60s` | |
 
 `generic-git` groups commits by `issue_key_pattern` in the subject (`PROJ-123`, upper-cased) or `commit-<7 sha>`; the newest commit supplies sha, time and summary, paths/routes are the union. Each feature is delivered once per shipped sha.
 
@@ -360,13 +653,26 @@ Network failures never error: the gate answers WAITING and logs. The scheduler t
 | `schedule.soak` / `p0` / `p1` / `p2` | `10m` / `15m` / `60m` / `6h` | Cadence by state/class |
 | `schedule.failure_backoff` | `5m` | Next due after any non-pass |
 | `schedule.tick` | `10s` | Due selection and lease reaping |
+| `schedule.daily_at` | `09:00` | Local `HH:MM` (`active_hours.tz`, else machine local) at which approved `cadence: daily` scripts run |
+
+### jira (approval write-back)
+
+`discovery.jira` is the read side; this is the write side.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `jira.cli` | `acli` | Binary used for `jira workitem comment create` / `list` |
+| `jira.comment_on_approve` | `true` | Post the approval receipt to the source issue |
+| `jira.dry_run` | `false` | Write the body to `<evidence>/jira/<KEY>-<ts>.md` instead of posting |
 
 ### agent
 
 | Key | Default | Meaning |
 |---|---|---|
 | `provider` | `pi` | |
-| `model` | `zai/glm-5.3-flash` | `<provider>/<model>` |
+| `model` | `zai/glm-5.3-flash` | `<provider>/<model>`; used only when `models` is empty |
+| `models` | | Ordered fallback chain, entry `provider/model[:thinking]` |
+| `model_cooldown` | `10m` | How long a chain entry that answered 429/quota/auth/5xx is skipped |
 | `thinking` | `high` | |
 | `timeout` | `20m` | Per agent task |
 | `extension` | `piext/vigil-browser.js` | pi extension exposing `agent_browser`; bundled file by default, pi-agent-browser-native as fallback |
@@ -377,6 +683,7 @@ Network failures never error: the gate answers WAITING and logs. The scheduler t
 | `sandbox` | `auto` | `auto` (nono when on PATH), `nono`, `none` |
 | `sandbox_network_filter` | `false` | Use `nono run` with a proxy allowlist of `target.allowed_hosts` |
 | `max_scenarios_per_task` | `3` | Candidate scenarios per agent task |
+| `domain_file` | | Markdown of domain rules (config-relative, bounded 12 KB) injected into every task prompt; see `examples/domain.example.md` |
 
 ### evidence retention
 
@@ -468,6 +775,7 @@ Exactly one action per step; `name` is an optional label.
 | `assert_count` | Locator fields + `equals` / `min` / `max` |
 | `assert_request` | `{ url_contains, method?, status?, status_min?, status_max?, body_contains?, timeout? }` |
 | `assert_attr` | Locator fields + `attr` + `equals` / `contains` |
+| `assert_data` | `{ ui: Locator, ui_regex?, api: { url_contains, json_path, method? }, compare: text\|number\|contains }` |
 | `expect_popup` | `{ url_contains?, timeout? }`; switches the run to the page opened by the previous action |
 | `eval` | `{ script, expect? }`; `expect` is a JSON-encoded value, empty = just run |
 | `use_flow` | flow id (not allowed inside flows) |
@@ -485,6 +793,12 @@ Exactly one action per step; `name` is an optional label.
 | `href` | `value` | `a[href]`/`area[href]` containing value (equal when `exact`) |
 | `css` | `value` | CSS selector |
 | empty | any of `value`, `text`, `name`, `role` | strategy inferred from the field set |
+
+`Parse` also accepts the aliases models and humans keep writing, before
+validation: `link` and `button` → `by: role` with that role (a `text` becomes the
+accessible `name`), `placeholder` → `label`, `testid` / `data-testid` / `test-id`
+→ `test_id`, `selector` → `css`. Anything else (`xpath`, …) still fails
+validation.
 
 Common fields: `exact` (bool), `nth` (0-based), `timeout` (e.g. `10s`).
 
@@ -510,7 +824,7 @@ Use a flow either with `uses: [id]` (runs before `steps`) or inline with `- use_
 
 ### Validation rules
 
-`validate` (and every import) rejects a scenario when: the id or version is invalid; `class`, `mutation`, `browser.primary` or `oracle.source` has an unknown value; `oracle.source` is missing; `steps` is empty; a step has zero or more than one action; a locator lacks its required field; `select` lacks `option`, `assert_count` lacks `equals`/`min`/`max`, `assert_request` lacks `url_contains`, `assert_attr` lacks `attr`, `eval` lacks `script`, `assert_url`/`wait_url` lack `contains`/`matches` or `matches` is not a valid regexp, `goto` is neither a path nor a URL; a `reversible`/`destructive` scenario has no `resources.locks`; there is no assertion at all (a step `assert_*` or a scenario-level `assert` flag); or `uses`/`use_flow` references an unknown flow. Unknown YAML keys are errors. Duplicate ids fail; duplicate fingerprints warn.
+`validate` (and every import) rejects a scenario when: the id or version is invalid; `class`, `mutation`, `browser.primary` or `oracle.source` has an unknown value; `oracle.source` is missing; `steps` is empty; a step has zero or more than one action; a locator lacks its required field; `select` lacks `option`, `assert_count` lacks `equals`/`min`/`max`, `assert_request` lacks `url_contains`, `assert_attr` lacks `attr`, `assert_data` lacks `api.url_contains` / `api.json_path` (which must start with `$`) or has a `compare` other than text/number/contains, `eval` lacks `script`, `assert_url`/`wait_url` lack `contains`/`matches` or `matches` is not a valid regexp, `goto` is neither a path nor a URL; a `reversible`/`destructive` scenario has no `resources.locks`; there is no assertion at all (a step `assert_*` or a scenario-level `assert` flag); or `uses`/`use_flow` references an unknown flow. Unknown YAML keys are errors. Duplicate ids fail; duplicate fingerprints warn.
 
 ### Fingerprint
 
@@ -527,12 +841,13 @@ The logical-scenario fingerprint hashes: `covers.capability`, `preconditions.per
 | `ACTIVE` | Promoted regression coverage; scheduled by class cadence |
 | `DUPLICATE` | Same fingerprint or structurally similar to an existing scenario |
 | `EPHEMERAL` | Exploratory only; never persisted as regression |
+| `PENDING_APPROVAL` | Reproduce script from a queue source (Jira / log / exec), validated and waiting for `vigil approve` (`승인 대기`); never due, manual runs change no state |
 | `NEEDS_REVIEW` | Human decision required (oracle unknown, observation-only, destructive without policy, inconclusive Chromium confirm) |
 | `REJECTED` | Rejected by `reject` |
 | `QUARANTINED` | `policy.quarantine_after` consecutive flakes |
 | `MERGED`, `SUPERSEDED`, `RETIRED` | Corpus governance states |
 
-Only `ACTIVE` and `SOAK` scenarios are selected as due. Files imported from `scenarios/` enter SOAK. `vigil approve <id>` moves NEEDS_REVIEW / CANDIDATE / QUARANTINED / REJECTED to SOAK with the soak counter and consecutive failures reset and the scenario due now; after `policy.soak_passes` clean runs the next PASS promotes it to ACTIVE. `vigil reject <id>` sets REJECTED and resolves its open regression incidents.
+Only `ACTIVE` and `SOAK` scenarios are selected as due. Files imported from `scenarios/` enter SOAK. `vigil approve <id>` moves NEEDS_REVIEW / CANDIDATE / QUARANTINED / REJECTED to SOAK with the soak counter and consecutive failures reset and the scenario due now; after `policy.soak_passes` clean runs the next PASS promotes it to ACTIVE. A `PENDING_APPROVAL` script instead becomes ACTIVE with `cadence: daily` (next due at `schedule.daily_at`), unless `--soak` is given. `vigil reject <id>` sets REJECTED and resolves its open regression incidents.
 
 ### Outcomes and what happens next
 
@@ -545,12 +860,15 @@ Only `ACTIVE` and `SOAK` scenarios are selected as due. Files imported from `sce
 | `APP_FAILURE` | Business assertion failed | One OPEN APP_REGRESSION incident (md + json); regressions counter; re-run at `failure_backoff` with top priority |
 | `AUTH_FAILURE`, `DATA_FAILURE`, `ENV_FAILURE`, `DEPLOYMENT_NOT_READY` | Infrastructure, not product | One OPEN ENVIRONMENT incident (shared); `failure_backoff`; no consecutive-failure bump |
 | `ORACLE_UNKNOWN`, `NEEDS_REVIEW` | Correctness cannot be established | State NEEDS_REVIEW |
+| any outcome of a `PENDING_APPROVAL` script | A human is judging it | Run and metrics recorded; no state change, no incident, no repair job |
 
 Retry: only read-only scenarios get one cheap retry (`policy.retry_on_fail`) before classification; mutating scenarios never retry. Chromium confirm: PASS on Chromium adds a new script version with `browser.primary: chromium` (mechanics only, `created_by: system`) and counts as PASS; a failed assertion on Chromium becomes APP_FAILURE "confirmed on chromium"; infrastructure outcomes open the environment incident; anything else goes to NEEDS_REVIEW. Budget: when browser minutes reach 100% every due scenario is deferred, at 80% clean P2 scenarios are deferred; the agent worker idles while `agent_tasks_per_hour` is spent.
 
 ### Feature decisions
 
-For a READY (or DEPLOYMENT_UNKNOWN) feature the orchestrator picks: `RUN_IMPACTED_SCRIPTS_FIRST` when ACTIVE/SOAK scenarios are linked by feature, capability (via `route_map`), route or changed path; otherwise `BROWSER_AGENT_DISCOVER` when the agent is available and within budget; otherwise `NO_ACTION`. When all impacted runs finish, clean results keep coverage; any APP_FAILURE, SCRIPT_DRIFT, BROWSER_AMBIGUOUS, LIGHTPANDA_INCOMPATIBLE, NEEDS_REVIEW or ORACLE_UNKNOWN enqueues `AGENT_VERIFY` (agent and budget permitting). The feature is marked handled for that SHA.
+For a feature whose kind is not `ship` (Jira issue, log signature, exec item) the orchestrator picks `REPRODUCE` and enqueues `AGENT_REPRODUCE`. When the Browser Agent is missing in this process, the agent budget is spent, or the default environment is read-only, the decision is a *deferred* `NO_ACTION`: the feature stays unhandled and the next `scan`/`loop` plans it again.
+
+For a READY (or DEPLOYMENT_UNKNOWN) ship feature the orchestrator picks: `RUN_IMPACTED_SCRIPTS_FIRST` when ACTIVE/SOAK scenarios are linked by feature, capability (via `route_map`), route or changed path; otherwise `BROWSER_AGENT_DISCOVER` when the agent is available and within budget; otherwise `NO_ACTION`. When all impacted runs finish, clean results keep coverage; any APP_FAILURE, SCRIPT_DRIFT, BROWSER_AMBIGUOUS, LIGHTPANDA_INCOMPATIBLE, NEEDS_REVIEW or ORACLE_UNKNOWN enqueues `AGENT_VERIFY` (agent and budget permitting). The feature is marked handled for that SHA.
 
 ### Priorities and job kinds
 
@@ -564,7 +882,7 @@ For a READY (or DEPLOYMENT_UNKNOWN) feature the orchestrator picks: `RUN_IMPACTE
 | P0 / P1 / P2 | 60 / 50 / 40 | Cadence runs by class |
 | Background | 10 | Reserved |
 
-Job kinds: `RUN_SCENARIO`, `AGENT_DISCOVER`, `AGENT_VERIFY`, `AGENT_REPAIR`, `CHROMIUM_CONFIRM`, `VALIDATE_CANDIDATE`. Job states: `READY`, `LEASED`, `DONE`, `FAILED`, `CANCELLED`. Leases last 5 minutes with a 30-second heartbeat; expired leases return to the queue every tick. Jobs are deduplicated by key (`run:<scenario>`, `impacted:...`, `agent:<feature>:<sha>`, `repair:...`, `chromium-confirm:...`), so a queued job is reused rather than duplicated.
+Job kinds: `RUN_SCENARIO`, `AGENT_DISCOVER`, `AGENT_VERIFY`, `AGENT_REPAIR`, `AGENT_REPRODUCE`, `CHROMIUM_CONFIRM`, `VALIDATE_CANDIDATE`. Job states: `READY`, `LEASED`, `DONE`, `FAILED`, `CANCELLED`. Leases last 5 minutes with a 30-second heartbeat; expired leases return to the queue every tick. Jobs are deduplicated by key (`run:<scenario>`, `impacted:...`, `agent:<feature>:<sha>`, `repair:...`, `chromium-confirm:...`), so a queued job is reused rather than duplicated.
 
 ## Browser Agent and the nono sandbox
 
@@ -590,7 +908,11 @@ agent/<feature>/<UTC ts>/               one Browser Agent task
     agent-request.yaml agent-task-prompt.md agent-system-prompt.md agent-argv.txt
     agent-transcript.jsonl agent-result.yaml agent-result.json agent-stderr.log nono.log
 incidents/<UTC ts>-<scenario>.md|json   portable incident for a coding agent
+jira/<KEY>-<UTC ts>.md                  approval comment body, when jira.dry_run is on
 ```
+
+`vigil export` writes outside the evidence root, next to the config:
+`export/playwright/<id>.spec.ts` by default (`-o` changes it).
 
 An incident carries: kind, project, outcome, reason, feature and shipped SHA, feature summary and changed paths, scenario id/version/title, browser, attempt, timing, failed step/action, expected vs actual, error text, console errors, failed or 5xx requests, artifact paths, Chromium confirmation excerpt, and the full scenario YAML for reproduction with `vigil run <scenario>`.
 
@@ -603,12 +925,15 @@ Logs: `loop` writes to stdout and `<state dir>/vigil.log` (state dir is the dire
 | Symptom | Cause and fix |
 |---|---|
 | Lightpanda serve probe fails or attaches to the wrong browser | Port 9222 is Chrome's default remote-debugging port; never use it. vigil uses 9333. Check `lsof -i :9333`; a healthy server on 9333 is attached, otherwise `bin/lightpanda serve` is launched |
-| Agent tasks end with `model unavailable after retries` / 429 | `zai/glm-5.3-flash` rate-limits quick successive calls. Keep `budget.agent_tasks_per_hour` at 4 and raise `agent.backoff` (this checkout: 60s) |
+| Agent tasks end with `model unavailable after retries` / 429 | `zai/glm-5.3-flash` rate-limits quick successive calls. Configure `agent.models` so another provider takes over instead of waiting; with a single model keep `budget.agent_tasks_per_hour` at 4 and raise `agent.backoff` (this checkout: 60s) |
 | Run classified `LIGHTPANDA_INCOMPATIBLE` or `BROWSER_AMBIGUOUS` | A `CHROMIUM_CONFIRM` job runs the same script on Chromium; a Chromium PASS adds a version with `browser.primary: chromium`. For rendering oracles set `browser.requires_chromium: true` in the scenario, or `browser.primary: chromium` in `vigil.yaml` to switch the default |
 | `locks [...] held elsewhere; requeued=true ... (AC-16)` | Two mutating scenarios share a lock key. The job is requeued 30 seconds later (up to 5 attempts, then FAILED and the scenario backs off) |
 | Feature shows `DEPLOYMENT_UNKNOWN` | `max_wait` elapsed without the asset marker or version endpoint changing. The gate proceeds as if READY; verify the deployment manually if results look stale |
 | `warn: Browser Agent unavailable, continuing with deterministic QA only` | `pi` is not on PATH (`npm i -g @earendil-works/pi-coding-agent`), the extension is missing (`npm i -g pi-agent-browser-native`), or the API key env is empty. Run `vigil doctor` |
 | `ingest[generic-git]: fetch failed, using local refs` | `git fetch origin <branch>` failed (credentials, network). Polling continues on local refs; `GIT_TERMINAL_PROMPT=0` prevents blocking |
 | `evidence/` keeps growing | Prune runs hourly in `loop` only. Lower `retain_pass_days` / `retain_fail_days`, or delete old `runs/` and `agent/` dirs by hand; incidents are never pruned |
+| Agent jobs stall right after adding Jira/Loki sources | A backlog of issue/log features can spend `budget.agent_tasks_per_hour` in one tick; further features are deferred (unhandled) until the next hour. Raise the budget, narrow `discovery.jira.jql`, or raise `discovery.loki.min_count` |
+| `discovery.loki.base_url is required when the loki adapter is enabled` | The `${VAR}` in the config expanded to empty: export the Grafana variables in the shell that starts vigil (`${VAR}` substitution is silent about unset names) |
+| `scan` prints issue/log features but nothing happens | `scan` orchestrates without a Browser Agent, so queue features are deferred and stay unhandled (`feature ...: deferred, stays unhandled`). They are planned by the next process that has an agent — `loop`, or `vigil reproduce <feature>` for one of them |
 | `vigil validate` warns `duplicate fingerprint` | Two files are the same logical scenario; prefer a variant or delete one |
 | `discover needs the Browser Agent` | `discover` runs the agent inline; fix the `doctor` agent checks first |

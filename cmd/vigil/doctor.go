@@ -13,8 +13,8 @@ import (
 
 	"vigil/internal/agent"
 	"vigil/internal/browser"
+	"vigil/internal/config"
 	"vigil/internal/gate"
-	"vigil/internal/model"
 )
 
 // doctorRow is one line of the doctor table.
@@ -79,11 +79,11 @@ func (a *app) cmdDoctor(ctx context.Context, args []string) (int, error) {
 	}
 
 	// repo / branch (generic-git only)
-	if cfg.Discovery.Adapter == "generic-git" || cfg.Discovery.Adapter == "sdlc-kit" {
+	if cfg.UsesAdapter(config.AdapterGenericGit) || cfg.UsesAdapter(config.AdapterSDLCKit) {
 		repo := cfg.Abs(cfg.Project.Repo)
 		if fi, err := os.Stat(repo); err != nil || !fi.IsDir() {
 			d.fail("repo", fmt.Sprintf("%s missing (project.repo)", repo))
-		} else if cfg.Discovery.Adapter == "generic-git" {
+		} else if cfg.UsesAdapter(config.AdapterGenericGit) {
 			out, err := exec.CommandContext(ctx, "git", "-C", repo, "log", "-1", "--format=%h %cI %s", cfg.Discovery.Branch, "--").Output()
 			if err != nil {
 				d.fail("repo", fmt.Sprintf("%s: branch %s not resolvable: %v", repo, cfg.Discovery.Branch, err))
@@ -137,8 +137,9 @@ func (a *app) cmdDoctor(ctx context.Context, args []string) (int, error) {
 		a.probeProvider(ctx, d, "chromium launch", browser.NewChromium(chBin, cfg.Browser.Chromium.Headless, doctorLogDir(a)), "")
 	}
 
-	// pi + keys + extension + sandbox
-	if piPath, err := exec.LookPath("pi"); err != nil {
+	// pi + model chain auth + keys + extension + sandbox
+	piPath, piErr := exec.LookPath("pi")
+	if piErr != nil {
 		d.warn("pi", "not on PATH; Browser Agent disabled, deterministic QA continues (rule 12)")
 	} else {
 		vctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -146,9 +147,36 @@ func (a *app) cmdDoctor(ctx context.Context, args []string) (int, error) {
 		cancel()
 		d.ok("pi", fmt.Sprintf("%s %s", piPath, trunc(strings.TrimSpace(string(out)), 40)))
 	}
+	chain, chainErr := agent.NewChainFromConfig(cfg)
+	if chainErr != nil {
+		d.fail("model chain", chainErr.Error())
+	} else {
+		// One line per chain entry: `pi auth check --provider <p> --json --no-refresh`.
+		// Not ready is a warning: the chain skips that entry at run time.
+		for _, e := range chain.Entries() {
+			check := "model " + e.Name()
+			if piErr != nil {
+				d.warn(check, fmt.Sprintf("thinking=%s; auth not checked (pi missing)", e.Thinking))
+				continue
+			}
+			st, err := agent.ProviderAuth(ctx, cfg, piPath, e.Provider)
+			switch {
+			case err != nil:
+				d.warn(check, fmt.Sprintf("thinking=%s; auth check failed: %s", e.Thinking, trunc(err.Error(), 120)))
+			case st.Ready():
+				d.ok(check, fmt.Sprintf("thinking=%s auth=%s (%s)", e.Thinking, st.Status, st.AuthType))
+			default:
+				reason := st.Reason
+				if reason == "" {
+					reason = st.Status
+				}
+				d.warn(check, fmt.Sprintf("thinking=%s auth=%s (%s); the chain skips this entry (pi auth login %s)", e.Thinking, st.Status, reason, e.Provider))
+			}
+		}
+	}
 	for piVar, shellVar := range cfg.Agent.EnvMap {
 		if os.Getenv(shellVar) == "" {
-			d.warn("api key "+piVar, fmt.Sprintf("env %s is empty (model %s will fail auth)", shellVar, cfg.Agent.Model))
+			d.warn("api key "+piVar, fmt.Sprintf("env %s is empty (chain entries using it fail auth and are skipped)", shellVar))
 		} else {
 			d.ok("api key "+piVar, fmt.Sprintf("from env %s (%d chars)", shellVar, len(os.Getenv(shellVar))))
 		}
@@ -161,6 +189,17 @@ func (a *app) cmdDoctor(ctx context.Context, args []string) (int, error) {
 		d.warn("pi extension", ext+" missing (npm i -g pi-agent-browser-native)")
 	} else {
 		d.ok("pi extension", ext)
+	}
+	if cfg.Agent.DomainFile == "" {
+		d.ok("domain file", "not configured (agent.domain_file); tasks run without domain rules")
+	} else if rules, err := agent.ReadDomainFile(cfg.Abs(cfg.Agent.DomainFile)); err != nil {
+		d.warn("domain file", fmt.Sprintf("%s: %v (tasks run without domain rules)", cfg.Agent.DomainFile, err))
+	} else {
+		note := ""
+		if strings.HasSuffix(rules, agent.DomainTruncatedMarker) {
+			note = fmt.Sprintf(", truncated to %d KB", agent.MaxDomainFileBytes/1024)
+		}
+		d.ok("domain file", fmt.Sprintf("%s (%d bytes%s)", cfg.Agent.DomainFile, len(rules), note))
 	}
 	mode, nonoBin, nonoWarn := agent.ResolveSandboxMode(cfg)
 	if nonoBin != "" {
@@ -180,7 +219,7 @@ func (a *app) cmdDoctor(ctx context.Context, args []string) (int, error) {
 		if err := ag.Doctor(actx); err != nil {
 			d.warn("agent doctor", trunc(err.Error(), 200))
 		} else {
-			d.ok("agent doctor", fmt.Sprintf("%s model=%s thinking=%s", cfg.Agent.Provider, cfg.Agent.Model, cfg.Agent.Thinking))
+			d.ok("agent doctor", fmt.Sprintf("%s models=%s cooldown=%s", cfg.Agent.Provider, strings.Join(cfg.ModelEntries(), " → "), cfg.Agent.ModelCooldown.Duration))
 		}
 		cancel()
 	}
@@ -204,14 +243,26 @@ func (a *app) cmdDoctor(ctx context.Context, args []string) (int, error) {
 	cancel()
 	g := gate.New(cfg)
 	if cfg.Deployment.Readiness.Strategy == "asset_version" {
-		page := g.AssetPage(&model.Feature{Routes: []string{cfg.EntryPath()}})
-		mctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		if marker, err := g.FetchAssetMarker(mctx, page); err != nil {
-			d.warn("asset marker", fmt.Sprintf("%s: %v (gate falls back to max_wait=%s)", page, err, cfg.Deployment.Readiness.MaxWait.Duration))
-		} else {
-			d.ok("asset marker", fmt.Sprintf("assets/index.js?v=%s at %s", marker, page))
+		// One line per environment: each serves its own build, and runs are
+		// tagged with the marker of the environment they ran against.
+		for _, name := range cfg.EnvNames() {
+			env, err := cfg.Env(name)
+			if err != nil {
+				continue
+			}
+			check := "asset marker"
+			if len(cfg.Target.Environments) > 0 {
+				check += " " + name
+			}
+			page := g.MarkerPageFor(env)
+			mctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			if marker, err := g.FetchAssetMarker(mctx, page); err != nil {
+				d.warn(check, fmt.Sprintf("%s: %v (gate falls back to max_wait=%s)", page, err, cfg.Deployment.Readiness.MaxWait.Duration))
+			} else {
+				d.ok(check, fmt.Sprintf("assets/index.js?v=%s at %s", marker, page))
+			}
+			cancel()
 		}
-		cancel()
 	}
 
 	if a.jsonOut {

@@ -144,7 +144,7 @@ func (o *Orchestrator) ImportScenarioFiles(ctx context.Context) (int, error) {
 // pinnedBrowser reports the engine a scenario forces, or "" when it takes the default.
 // Mirrors the precedence in scheduler.pickBrowser.
 func pinnedBrowser(sc *dsl.Scenario) model.Browser {
-	if sc.Browser.RequiresChromium {
+	if sc.RequiresChromiumEngine() {
 		return model.BrowserChromium
 	}
 	if sc.Browser.Primary != "" {

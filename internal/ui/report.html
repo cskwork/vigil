@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" data-theme="auto">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="light dark">
 <title>QA 검증 리포트</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
@@ -14,9 +14,14 @@
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
     <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
-    <a href="/">검증 결과</a>
+    <a href="/">할 일</a>
+    <a href="/results">검증 결과</a>
     <a href="/scripts">검사 스크립트</a>
     <a href="/activity">시스템 활동</a>
+    <a href="/help">도움말</a>
+    <div class="rail-foot">
+      <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
+    </div>
   </nav>
   <div class="content">
     <header class="topbar">
@@ -27,20 +32,15 @@
       <div id="fetchErr"></div>
       <section class="panel"><div class="body">
         <div class="report-h" id="head"><div class="skel" style="width:50%"></div></div>
-        <table><thead><tr><th>검사 항목</th><th>결과</th><th>검증 시각</th><th>증거</th></tr></thead><tbody id="matrix"><tr><td colspan="4"><div class="skel"></div></td></tr></tbody></table>
+        <table><thead><tr><th>검사 항목</th><th class="fit">결과</th><th class="fit">검증 시각</th><th>증거</th></tr></thead><tbody id="matrix"><tr><td colspan="4"><div class="skel"></div></td></tr></tbody></table>
       </div></section>
       <section class="panel"><header><h2>항목별 증거</h2><p>단계, 검증 당시 화면, 서버 응답 중 문제된 것</p></header><div class="body" id="details"><div class="skel"></div></div></section>
     </main>
   </div>
 </div>
 <div class="toast" id="toast" role="status"></div>
+<script src="/ui/app.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const OUTCOME = { PASS: ['정상', 'ok'], APP_FAILURE: ['서비스 문제', 'bad'], QA_FLAKE: ['일시 오류, 재검사 정상', 'warn'], SCRIPT_DRIFT: ['화면이 바뀜, 검사 수정 필요', 'warn'], LIGHTPANDA_INCOMPATIBLE: ['다른 브라우저로 재확인', 'info'], BROWSER_AMBIGUOUS: ['재확인 필요', 'info'], AUTH_FAILURE: ['로그인 문제', 'warn'], DATA_FAILURE: ['데이터 문제', 'warn'], ENV_FAILURE: ['검사 환경 문제', 'warn'], NEEDS_REVIEW: ['사람 확인 필요', 'warn'], ORACLE_UNKNOWN: ['판단 기준 불명확', 'warn'] };
-const STEP = { goto: '페이지 이동', click: '클릭', fill: '입력', type: '입력', press: '키 입력', select: '선택', hover: '마우스 올리기', wait_for: '화면 표시 기다림', wait_ms: '잠시 기다림', wait_url: '주소 변경 기다림', assert_text: '문구 확인', assert_no_text: '문구 없음 확인', assert_visible: '표시 확인', assert_not_visible: '숨김 확인', assert_url: '주소 확인', assert_count: '개수 확인', assert_request: '서버 응답 확인', assert_attr: '상태 확인', expect_popup: '새 탭 열림 확인', eval: '값 확인', use_flow: '공통 절차', screenshot: '화면 캡처' };
-const CLASS = { P0: '매우 중요', P1: '중요', P2: '보통' };
-const st = (map, v) => { const m = map[v]; return v ? `<span class="st st-${m ? m[1] : 'muted'}"><i></i>${esc(m ? m[0] : v)}</span>` : ''; };
 const marker = new URLSearchParams(location.search).get('marker') || '';
 let data = null;
 
@@ -50,33 +50,30 @@ async function load() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     data = await r.json();
     render();
-  } catch (e) { $('fetchErr').innerHTML = `<div class="errbox"><span>리포트를 만들지 못했습니다 (${esc(e.message)})</span><button class="btn" onclick="load()">다시 시도</button></div>`; }
+  } catch (e) { $('fetchErr').innerHTML = `<div class="errbox"><span>리포트를 만들지 못했습니다 (${esc(e.message)})</span><button class="btn" id="retryBtn">다시 시도</button></div>`; $('retryBtn').onclick = load; }
 }
 
 async function render() {
   const o = data, checks = o.checks || [], dep = (o.deployments || []).find(d => d.marker === o.marker);
   const v = checks.filter(c => !c.not_verified), p = v.filter(c => c.outcome === 'PASS' || c.outcome === 'QA_FLAKE');
-  $('brandTarget').textContent = o.target.replace(/^https?:\/\//, '');
+  setTarget(o.target);
   document.title = `QA 검증 리포트 ${o.marker}`;
   $('head').innerHTML = `<h1>QA 검증 리포트</h1><p>대상 ${esc(o.target)} · 배포 마커 <span class="mono">${esc(o.marker || '없음')}</span>${dep ? ` · 처음 확인 ${esc(dep.first_seen)} · 마지막 검증 ${esc(dep.last_seen)}` : ''}</p><p style="margin-top:8px">${st({ ok: ['정상', 'ok'], bad: ['문제 있음', 'bad'], warn: ['확인 필요', 'warn'], idle: ['결과 없음', 'muted'] }, !v.length ? 'idle' : v.some(c => c.outcome === 'APP_FAILURE') || (o.incidents || []).length ? 'bad' : p.length === v.length ? 'ok' : 'warn')} 검증 ${p.length}/${v.length} 정상, 미실행 ${checks.length - v.length}, 미해결 문제 ${(o.incidents || []).length}건 · 생성 ${new Date().toLocaleString('ko-KR')}</p>`;
-  $('matrix').innerHTML = checks.map(c => `<tr><td><div class="t">${esc(c.title || c.scenario_id)}</div><div class="sub">${esc(CLASS[c.class] || c.class)}</div></td><td class="st-cell">${c.not_verified ? st({ x: ['미실행', 'muted'] }, 'x') : st(OUTCOME, c.outcome)}</td><td>${esc(c.finished_at || '')}</td><td class="sub">${c.not_verified ? '' : [c.screenshot ? (c.browser === 'lightpanda' ? '화면 캡처(텍스트 렌더링)' : '화면 캡처') : '', c.steps ? `단계 ${c.steps}` : '', c.requests ? `서버 응답 ${c.requests}` : '', c.console_errors ? `콘솔 오류 ${c.console_errors}` : ''].filter(Boolean).join(' · ')}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">검사 항목이 없습니다.</td></tr>';
+  $('matrix').innerHTML = checks.map(c => `<tr><td><div class="t">${esc(c.title || c.scenario_id)}</div><div class="sub">${esc(CLASS[c.class] || c.class)} ${envBadge(c.environment)}</div></td><td class="st-cell">${c.not_verified ? st({ x: ['미실행', 'muted'] }, 'x') : st(OUTCOME, c.outcome)}</td><td class="fit">${esc(c.finished_at || '')}</td><td class="sub">${c.not_verified ? '' : [c.screenshot ? (c.browser === 'lightpanda' ? '화면 캡처(텍스트 렌더링)' : '화면 캡처') : '', c.steps ? `단계 ${c.steps}` : '', c.requests ? `서버 응답 ${c.requests}` : '', c.console_errors ? `콘솔 오류 ${c.console_errors}` : ''].filter(Boolean).join(' · ')}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">검사 항목이 없습니다.</td></tr>';
 
-  const parts = [];
-  for (const c of checks) {
-    if (c.not_verified) continue;
-    let d = {};
-    try { const r = await fetch('/api/run/detail?dir=' + encodeURIComponent(c.evidence_rel), { cache: 'no-store' }); if (r.ok) d = await r.json(); } catch { }
-    const steps = (d.steps && d.steps.steps) || [];
-    const flowOf = (n) => { const m = /^flow:([^/]+)\//.exec(n || ''); return m ? m[1] : ''; };
+  // evidence bundles load in parallel; each run dir is immutable and cacheable
+  const verified = checks.filter(c => !c.not_verified);
+  const bundles = await Promise.all(verified.map(async c => { try { const r = await fetch('/api/run/detail?dir=' + encodeURIComponent(c.evidence_rel)); return r.ok ? await r.json() : {}; } catch { return {}; } }));
+  const parts = verified.map((c, i) => {
+    const d = bundles[i];
     const bad = (d.network || []).filter(n => n.failed || n.status >= 400);
-    parts.push(`<div class="check"><h3>${esc(c.title || c.scenario_id)} ${st(OUTCOME, c.outcome)} <span class="sub">${esc(c.finished_at)} · ${(c.duration_ms / 1000).toFixed(1)}초 · ${esc(c.browser)}</span></h3>
-      ${c.outcome !== 'PASS' ? `<p class="sub">${c.failed_step ? `${c.failed_step}단계 "${esc(STEP[c.failed_action] || c.failed_action)}"에서 멈춤: ${esc(c.actual || c.error)}` : esc(c.error)}</p>` : ''}
-      <div class="steps">${steps.map(x => { const flow = flowOf(x.name); const detail = x.ok ? (x.expected || x.actual || '') : [x.expected ? `기대: ${x.expected}` : '', x.actual ? `실제: ${x.actual}` : '', x.error || ''].filter(Boolean).join(' / ');
-        return `<div class="step"><span class="n">${x.index}</span>${st({ ok: ['성공', 'ok'], fail: ['실패', 'bad'] }, x.ok ? 'ok' : 'fail')}<span><b>${esc(STEP[x.kind] || x.kind)}</b>${flow ? ` <span class="sub">공통 절차 ${esc(flow)}</span>` : ''}<div class="how">${esc(detail)}</div></span></div>`; }).join('') || '<div class="sub">단계 기록 없음</div>'}</div>
-      ${bad.length ? `<p class="sub" style="margin:8px 0 4px">문제된 서버 응답 ${bad.length}건</p><table class="net"><tbody>${bad.map(n => `<tr><td>${esc(n.method)}</td><td class="num">${n.failed ? '실패' : n.status}</td><td class="url">${esc(n.url)}</td></tr>`).join('')}</tbody></table>` : ''}
+    return `<div class="check"><h3>${esc(c.title || c.scenario_id)} ${st(OUTCOME, c.outcome)} <span class="sub">${esc(c.finished_at)} · ${(c.duration_ms / 1000).toFixed(1)}초 · ${esc(BROWSER[c.browser] || c.browser)}</span> ${envBadge(c.environment)}</h3>
+      ${c.cause ? `<p class="cause-l1">${st(CAUSE_KIND, c.cause.kind)}<span class="cause-line">${esc(c.cause.headline)}</span></p><p class="sub">${esc(c.cause.why)} ${esc(c.cause.next)}</p>` : ''}
+      ${stepsHTML((d.steps && d.steps.steps) || [])}
+      ${bad.length ? `<p class="sub" style="margin:8px 0 4px">문제된 서버 응답 ${bad.length}건</p><table class="net"><tbody>${bad.map(n => `<tr><td class="fit">${esc(n.method)}</td><td class="num">${n.failed ? '실패' : n.status}</td><td class="url">${esc(n.url)}</td></tr>`).join('')}</tbody></table>` : ''}
       ${(d.screenshots || []).length ? `${c.browser === 'lightpanda' ? '<p class="sub" style="margin:8px 0 4px">가벼운 브라우저의 텍스트 렌더링 캡처 (실제 화면 아님)</p>' : ''}<div class="shots" style="margin-top:10px">${d.screenshots.map(s => `<figure><img src="/evidence/${esc(s)}" alt="검증 당시 화면" loading="lazy"><figcaption>${esc(s.split('/').pop())}</figcaption></figure>`).join('')}</div>` : ''}
-    </div>`);
-  }
+    </div>`;
+  });
   $('details').innerHTML = parts.join('') || '<div class="empty">이 배포에서 실행된 검사가 없습니다.</div>';
 }
 
@@ -87,7 +84,6 @@ $('copyMd').onclick = async () => {
   for (const c of checks) { const res = c.not_verified ? '미실행' : (OUTCOME[c.outcome] || [c.outcome])[0]; L.push(`| ${c.title || c.scenario_id} | ${res} | ${c.finished_at || ''} | ${c.not_verified ? '' : [c.screenshot ? (c.browser === 'lightpanda' ? '화면(텍스트 렌더링)' : '화면') : '', c.steps ? `단계 ${c.steps}` : '', c.requests ? `응답 ${c.requests}` : ''].filter(Boolean).join(', ')} |`); }
   try { await navigator.clipboard.writeText(L.join('\n')); toast('Markdown을 복사했습니다.'); } catch { toast('복사에 실패했습니다. 화면 내용을 선택해 복사하세요.'); }
 };
-function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2500); }
 load();
 </script>
 </body>

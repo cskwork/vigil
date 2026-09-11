@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 
@@ -36,6 +37,10 @@ type session struct {
 	knownTargets    map[target.ID]bool
 	stepRef         int
 	urlBeforeAction string // page URL before the action preceding an expect_popup
+
+	// bodyOf / textOf override the CDP paths assert_data uses (tests stub them).
+	bodyOf func(ctx context.Context, id network.RequestID) ([]byte, error)
+	textOf func(ctx context.Context, l *dsl.Locator, ref string) (string, *stepErr)
 }
 
 // stepErr is a step failure with its raw class (PRD §13 classification input).
@@ -146,6 +151,8 @@ func (s *session) stepTimeoutFor(st dsl.Step) time.Duration {
 		raw = st.AssertRequest.Timeout
 	case "assert_attr":
 		raw = st.AssertAttr.Timeout
+	case "assert_data":
+		raw = st.AssertData.UI.Timeout
 	case "expect_popup":
 		raw = st.ExpectPopup.Timeout
 	case "assert_text":
@@ -344,6 +351,33 @@ func resolveURL(base, ref string) (string, error) {
 		return "", fmt.Errorf("goto %q: %w", ref, err)
 	}
 	return b.ResolveReference(r).String(), nil
+}
+
+// checkAllowlist rejects an absolute URL whose host is outside spec.AllowedHosts.
+// An empty allowlist means unrestricted (legacy specs).
+func (s *session) checkAllowlist(u string) *stepErr {
+	if !urlAllowed(s.spec.AllowedHosts, u) {
+		return fail(FailEnvironment, "goto %s: %s (%s)", u, ErrOutsideAllowlist, s.spec.Environment).with("host in "+strings.Join(s.spec.AllowedHosts, ","), u)
+	}
+	return nil
+}
+
+func urlAllowed(allowed []string, raw string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, h := range allowed {
+		h = strings.ToLower(h)
+		if host == h || strings.HasSuffix(host, "."+h) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyCDPErr maps an error from chromedp into a failure class, using def

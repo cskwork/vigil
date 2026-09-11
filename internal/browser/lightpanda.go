@@ -82,6 +82,12 @@ func (l *lightpanda) endpoint(v *versionInfo) *Endpoint {
 	return &Endpoint{Kind: model.BrowserLightpanda, WebSocketURL: ws}
 }
 
+func (l *lightpanda) Running() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.cmd != nil
+}
+
 // Stop kills the process only if this provider launched it.
 func (l *lightpanda) Stop() error {
 	l.mu.Lock()

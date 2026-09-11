@@ -36,7 +36,12 @@ type resolution struct {
 	Tag     string `json:"tag,omitempty"`
 	Text    string `json:"text,omitempty"`
 	Error   string `json:"error,omitempty"`
-	By      string `json:"by,omitempty"` // strategy that produced the match (auto mode)
+	By      string `json:"by,omitempty"`   // strategy that produced the match (auto mode)
+	Note    string `json:"note,omitempty"` // e.g. a text locator that matched an accessible name
+	// Candidates lists the accessible names the page offers for the attempted
+	// strategy when nothing matched; CandidateKind names that strategy.
+	Candidates    []string `json:"candidates,omitempty"`
+	CandidateKind string   `json:"candidate_kind,omitempty"`
 }
 
 // resolverJS implements the PRD §10 locator order in the page:
@@ -56,30 +61,75 @@ const resolverJS = `(function(spec){
     if (typeof el.getClientRects === 'function' && el.getClientRects().length === 0) return false;
     return true;
   };
-  var accName = function(el){
-    var lb = el.getAttribute('aria-labelledby');
-    if (lb) {
-      var t = lb.split(/\s+/).map(function(id){ var r = document.getElementById(id); return r ? norm(r.textContent) : ''; }).filter(Boolean).join(' ');
-      if (t) return t;
-    }
-    var al = el.getAttribute('aria-label'); if (al && norm(al)) return norm(al);
-    if (el.labels && el.labels.length) {
-      var lt = Array.prototype.map.call(el.labels, function(l){ return norm(l.textContent); }).filter(Boolean).join(' ');
-      if (lt) return lt;
-    }
-    var tag = el.tagName.toLowerCase();
-    if (tag === 'img' || tag === 'area') return norm(el.getAttribute('alt'));
-    if (tag === 'input') {
-      var ty = (el.getAttribute('type') || '').toLowerCase();
-      if (ty === 'button' || ty === 'submit' || ty === 'reset') return norm(el.value || (ty === 'submit' ? 'Submit' : ty === 'reset' ? 'Reset' : ''));
-      if (ty === 'image') return norm(el.getAttribute('alt'));
-      var ph = el.getAttribute('placeholder'); if (ph) return norm(ph);
-    }
-    var t2 = norm(el.textContent);
-    if (!t2) { t2 = norm(Array.prototype.map.call(el.querySelectorAll('img[alt]'), function(i){ return i.getAttribute('alt'); }).join(' ')); }
-    if (!t2) t2 = norm(el.getAttribute('title'));
-    return t2;
+  // accName follows the accessible name computation closely enough to match
+  // Chrome for common markup: aria-labelledby -> aria-label -> native label
+  // (<label>, alt, input value, <title> in svg) -> name from content, where
+  // every descendant contributes its own accessible name (img alt, aria-label,
+  // text) and aria-hidden/hidden subtrees are skipped -> title attribute.
+  // Plain DOM APIs only: Lightpanda exposes no accessibility tree.
+  var nameHidden = function(el){
+    if (!el) return true;
+    if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') return true;
+    if (el.hidden) return true;
+    var cs = null; try { cs = getComputedStyle(el); } catch (e) {}
+    if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return true;
+    return false;
   };
+  var labelsOf = function(el){
+    var out = [];
+    try { if (el.labels && el.labels.length) out = Array.prototype.slice.call(el.labels); } catch (e) {}
+    if (!out.length && el.id) out = q('label[for="' + String(el.id).replace(/"/g, '\\"') + '"]') || [];
+    if (!out.length && el.closest) { var p = null; try { p = el.closest('label'); } catch (e) {} if (p) out = [p]; }
+    return out;
+  };
+  var nameFrom = function(el, depth, chain){
+    if (!el || !el.tagName || depth > 20 || chain.indexOf(el) >= 0) return '';
+    chain.push(el);
+    try {
+      var get = function(a){ return el.getAttribute ? el.getAttribute(a) : null; };
+      if (depth === 0) {
+        var lb = get('aria-labelledby');
+        if (lb) {
+          var t = lb.split(/\s+/).map(function(id){
+            var r = document.getElementById(id);
+            return r ? (nameFrom(r, depth + 1, chain) || norm(r.textContent)) : '';
+          }).filter(Boolean).join(' ');
+          if (norm(t)) return norm(t);
+        }
+      }
+      var al = get('aria-label'); if (al && norm(al)) return norm(al);
+      var tag = el.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'select' || tag === 'textarea') {
+        var lt = labelsOf(el).map(function(l){ return norm(l.textContent); }).filter(Boolean).join(' ');
+        if (lt) return lt;
+      }
+      if (tag === 'img' || tag === 'area') { var alt = get('alt'); if (alt !== null) return norm(alt); }
+      if (tag === 'input') {
+        var ty = (get('type') || '').toLowerCase();
+        if (ty === 'button' || ty === 'submit' || ty === 'reset') return norm(el.value || (ty === 'submit' ? 'Submit' : ty === 'reset' ? 'Reset' : ''));
+        if (ty === 'image') { var ialt = get('alt'); if (ialt !== null && norm(ialt)) return norm(ialt); return norm(get('title') || 'Submit'); }
+        var ph = get('placeholder'); if (ph && norm(ph)) return norm(ph);
+      }
+      if (tag === 'svg' && el.querySelector) { var ti = el.querySelector('title'); if (ti && norm(ti.textContent)) return norm(ti.textContent); }
+      if (tag === 'fieldset' && el.querySelector) { var lg = el.querySelector('legend'); if (lg && norm(lg.textContent)) return norm(lg.textContent); }
+      var parts = [], kids = el.childNodes || [];
+      for (var i = 0; i < kids.length; i++) {
+        var n = kids[i];
+        if (n.nodeType === 3) { var tx = norm(n.nodeValue); if (tx) parts.push(tx); continue; }
+        if (n.nodeType !== 1) continue;
+        var kt = (n.tagName || '').toLowerCase();
+        if (kt === 'script' || kt === 'style' || kt === 'noscript' || kt === 'template') continue;
+        if (nameHidden(n)) continue;
+        var sub = nameFrom(n, depth + 1, chain);
+        if (sub) parts.push(sub);
+      }
+      var content = norm(parts.join(' '));
+      if (content) return content;
+      var tt = get('title'); if (tt && norm(tt)) return norm(tt);
+      return '';
+    } finally { chain.pop(); }
+  };
+  var accName = function(el){ return nameFrom(el, 0, []); };
   var roleSelectors = {
     button: 'button, [role=button], input[type=button], input[type=submit], input[type=reset], input[type=image], summary',
     link: 'a[href], area[href], [role=link]',
@@ -125,19 +175,26 @@ const resolverJS = `(function(spec){
     });
     return out;
   };
+  var nameMatched = false;
   var byText = function(text, exact){
-    var all = q('body *') || [];
-    var matches = [];
-    for (var i = 0; i < all.length; i++) {
-      var el = all[i], tag = el.tagName;
-      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') continue;
-      if (matchText(el.textContent, text, exact)) matches.push(el);
-    }
-    // innermost only: drop elements that have an element child which also matches
-    return matches.filter(function(el){
-      for (var k = 0; k < el.children.length; k++) { if (matchText(el.children[k].textContent, text, exact)) return false; }
-      return true;
+    var all = (q('body *') || []).filter(function(el){
+      var tag = el.tagName;
+      return tag !== 'SCRIPT' && tag !== 'STYLE' && tag !== 'NOSCRIPT' && tag !== 'TEMPLATE';
     });
+    // innermost only: drop elements that have an element child which also matches
+    var pick = function(get){
+      return all.filter(function(el){ return matchText(get(el), text, exact); }).filter(function(el){
+        for (var k = 0; k < el.children.length; k++) { if (matchText(get(el.children[k]), text, exact)) return false; }
+        return true;
+      });
+    };
+    var out = pick(function(el){ return el.textContent; });
+    if (out.length) return out;
+    // Agent snapshots show accessible names, so a text locator copied from one
+    // must still find aria-label / alt only elements.
+    out = pick(function(el){ return accName(el); });
+    if (out.length) nameMatched = true;
+    return out;
   };
   var byHref = function(value, exact){
     return (q('a[href], area[href]') || []).filter(function(a){
@@ -148,6 +205,34 @@ const resolverJS = `(function(spec){
   var byTestID = function(v){ return q('[data-testid="' + v.replace(/"/g, '\\"') + '"], [data-test-id="' + v.replace(/"/g, '\\"') + '"]') || []; };
   var byID = function(v){ var el = document.getElementById(v); return el ? [el] : []; };
   var byCSS = function(v){ var r = q(v); if (r === null) throw new Error('invalid css selector: ' + v); return r; };
+
+  // candidatesFor lists what the page actually offers when a semantic locator
+  // matched nothing, so a repair can pick a name that exists.
+  var describeName = function(el){
+    var n = accName(el);
+    if (n) return n;
+    var t = norm((el.getAttribute && (el.getAttribute('title') || el.getAttribute('placeholder'))) || '');
+    return t || ('<' + el.tagName.toLowerCase() + '>');
+  };
+  var candidatesFor = function(used, spec){
+    var out = [], seen = {};
+    var push = function(s){ s = norm(s).slice(0, 80); if (!s || seen[s]) return; seen[s] = true; out.push(s); };
+    if (used === 'role') {
+      var peers = byRole(spec.role, '', false);
+      peers.forEach(function(el){ if (isVisible(el)) push(describeName(el)); });
+      if (!out.length) peers.forEach(function(el){ push(describeName(el)); });
+      return out.slice(0, 8);
+    }
+    var all = q('body *') || [];
+    for (var i = 0; i < all.length && out.length < 8; i++) {
+      var el = all[i], tag = el.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') continue;
+      if (el.children && el.children.length) continue; // innermost text carriers only
+      if (!isVisible(el)) continue;
+      push(accName(el) || norm(el.textContent));
+    }
+    return out.slice(0, 8);
+  };
 
   var els = null, used = spec.by;
   switch (spec.by) {
@@ -170,15 +255,63 @@ const resolverJS = `(function(spec){
   }
   Array.prototype.forEach.call(document.querySelectorAll('[` + refAttr + `]'), function(e){ e.removeAttribute('` + refAttr + `'); });
   var res = { count: els.length, found: false, visible: false, by: used };
-  if (!els.length) return res;
+  if (!els.length) {
+    if (used === 'role' || used === 'text' || used === 'label') {
+      res.candidate_kind = used === 'role' ? 'role=' + spec.role : used;
+      try { res.candidates = candidatesFor(used, spec); } catch (e) { res.candidates = []; }
+    }
+    return res;
+  }
   var nth = spec.nth || 0;
   if (nth >= els.length) { res.error = 'nth=' + nth + ' out of range (matched ' + els.length + ')'; return res; }
   var el = els[nth];
   el.setAttribute('` + refAttr + `', spec.ref);
   res.found = true; res.visible = isVisible(el); res.tag = el.tagName.toLowerCase();
   res.text = norm(el.textContent).slice(0, 120);
+  if (nameMatched) {
+    res.note = 'matched by accessible name';
+    res.text = (res.text ? res.text + ' ' : '') + '(matched by accessible name)';
+  }
   return res;
 })`
+
+// maxCandidatesText bounds the candidate list appended to a locator miss so
+// evidence and the repair prompt stay readable.
+const maxCandidatesText = 600
+
+// candidatesText renders the resolver's candidate names as a suffix for a
+// "0 matches" message, e.g.
+//
+//	; candidates(role=button): "과제 과제", "학급 분석"
+//
+// It returns "" when the resolver reported none.
+func candidatesText(r *resolution) string {
+	if r == nil || len(r.Candidates) == 0 {
+		return ""
+	}
+	kind := r.CandidateKind
+	if kind == "" {
+		kind = r.By
+	}
+	head := "; candidates(" + kind + "): "
+	var b strings.Builder
+	b.WriteString(head)
+	for i, c := range r.Candidates {
+		item := fmt.Sprintf("%q", c)
+		if i > 0 {
+			item = ", " + item
+		}
+		if b.Len()+len(item)+len(", \u2026") > maxCandidatesText {
+			b.WriteString(", \u2026")
+			break
+		}
+		b.WriteString(item)
+	}
+	if b.Len() == len(head) {
+		return ""
+	}
+	return b.String()
+}
 
 func specFromLocator(l *dsl.Locator, ref string) locatorSpec {
 	return locatorSpec{By: l.By, Role: l.Role, Name: l.Name, Value: l.Value, Text: l.Text, Exact: l.Exact, Nth: l.Nth, Ref: ref}

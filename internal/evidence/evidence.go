@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"vigil/internal/explain"
 	"vigil/internal/model"
 	"vigil/internal/runner"
 )
@@ -91,19 +92,23 @@ type IncidentInput struct {
 
 // IncidentDoc is the JSON shape written next to the Markdown incident.
 type IncidentDoc struct {
-	Title           string            `json:"title"`
-	Kind            string            `json:"kind"`
-	Project         string            `json:"project"`
-	Feature         string            `json:"feature,omitempty"`
-	ShippedSHA      string            `json:"shipped_sha,omitempty"`
-	FeatureSummary  string            `json:"feature_summary,omitempty"`
-	ChangedPaths    []string          `json:"changed_paths,omitempty"`
-	ScenarioID      string            `json:"scenario_id"`
-	ScenarioVersion int               `json:"scenario_version"`
-	ScenarioTitle   string            `json:"scenario_title,omitempty"`
-	Browser         string            `json:"browser"`
-	Attempt         int               `json:"attempt"`
-	Outcome         string            `json:"outcome"`
+	Title           string   `json:"title"`
+	Kind            string   `json:"kind"`
+	Project         string   `json:"project"`
+	Environment     string   `json:"environment,omitempty"`
+	Feature         string   `json:"feature,omitempty"`
+	ShippedSHA      string   `json:"shipped_sha,omitempty"`
+	FeatureSummary  string   `json:"feature_summary,omitempty"`
+	ChangedPaths    []string `json:"changed_paths,omitempty"`
+	ScenarioID      string   `json:"scenario_id"`
+	ScenarioVersion int      `json:"scenario_version"`
+	ScenarioTitle   string   `json:"scenario_title,omitempty"`
+	Browser         string   `json:"browser"`
+	Attempt         int      `json:"attempt"`
+	Outcome         string   `json:"outcome"`
+	// Cause is the one-sentence plain-Korean cause (internal/explain), the
+	// same sentence the dashboard and the CLI print for this run.
+	Cause           string            `json:"cause,omitempty"`
 	Reason          string            `json:"reason,omitempty"`
 	FailedStep      int               `json:"failed_step"`
 	FailedAction    string            `json:"failed_action,omitempty"`
@@ -156,6 +161,7 @@ func (s *Store) buildDoc(in IncidentInput) IncidentDoc {
 	doc := IncidentDoc{
 		Kind:            string(model.IncidentAppRegression),
 		Project:         r.ProjectID,
+		Environment:     r.Environment,
 		Feature:         r.FeatureID,
 		ShippedSHA:      r.ShippedSHA,
 		ScenarioID:      r.ScenarioID,
@@ -199,6 +205,7 @@ func (s *Store) buildDoc(in IncidentInput) IncidentDoc {
 			doc.ScenarioID = in.Scenario.ID
 		}
 	}
+	doc.Cause = explain.ForIncident(in.Incident, r, in.Scenario).Headline
 	if in.Version != nil {
 		doc.ScenarioYAML = in.Version.YAML
 		if doc.ScenarioVersion == 0 {
@@ -256,6 +263,9 @@ func renderMarkdown(d IncidentDoc) string {
 	var b strings.Builder
 	w := func(f string, a ...any) { fmt.Fprintf(&b, f, a...) }
 	w("# %s\n\n", d.Title)
+	if d.Cause != "" {
+		w("원인: %s\n\n", d.Cause)
+	}
 	w("- kind: %s\n- project: %s\n- outcome: %s\n", d.Kind, d.Project, d.Outcome)
 	if d.Reason != "" {
 		w("- reason: %s\n", d.Reason)
@@ -264,6 +274,7 @@ func renderMarkdown(d IncidentDoc) string {
 
 	w("## Context\n\n")
 	w("| field | value |\n|---|---|\n")
+	w("| environment | %s |\n", orDash(d.Environment))
 	w("| feature | %s |\n", orDash(d.Feature))
 	w("| shipped sha | %s |\n", orDash(d.ShippedSHA))
 	if d.FeatureSummary != "" {

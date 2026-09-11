@@ -217,7 +217,31 @@ func ParseResult(text string) (*Result, error) {
 	}
 	r.ScriptCandidates = cands
 	r.ScriptPatch = strings.TrimSpace(r.ScriptPatch)
+	r.Findings = NormalizeFindings(r.Findings)
 	return &r, nil
+}
+
+// NormalizeFindings trims fields, lower-cases the kind, folds unknown kinds to
+// display (raw kind kept in evidence) and drops findings with nothing to say.
+func NormalizeFindings(in []Finding) []Finding {
+	var out []Finding
+	for _, f := range in {
+		f.Kind = strings.ToLower(strings.TrimSpace(f.Kind))
+		f.Where, f.Expected, f.Actual, f.Evidence = strings.TrimSpace(f.Where), strings.TrimSpace(f.Expected), strings.TrimSpace(f.Actual), strings.TrimSpace(f.Evidence)
+		if f.Where == "" && f.Expected == "" && f.Actual == "" && f.Evidence == "" {
+			continue
+		}
+		if !KnownFindingKinds[f.Kind] {
+			raw := f.Kind
+			if raw == "" {
+				raw = "(none)"
+			}
+			f.Kind = FindingDisplay
+			f.Evidence = strings.TrimSpace("kind: " + raw + "\n" + f.Evidence)
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // ---- allowed hosts ---------------------------------------------------------
@@ -258,7 +282,7 @@ func hostAllowed(host string, allowed []string) bool {
 }
 
 // resultKnownKeys are the contract fields; anything else the model adds is kept as evidence text.
-var resultKnownKeys = map[string]bool{"decision": true, "evidence": true, "coverage_delta": true, "oracle_provenance": true, "script_candidates": true, "script_patch": true, "observed": true, "visited_urls": true, "ephemeral": true}
+var resultKnownKeys = map[string]bool{"decision": true, "evidence": true, "coverage_delta": true, "oracle_provenance": true, "script_candidates": true, "script_patch": true, "observed": true, "visited_urls": true, "ephemeral": true, "reproduction": true, "findings": true}
 
 // normalizeResultBody makes the model's block match the contract when it is close:
 // a single root key "vigil-result:" is unwrapped, and script_candidates given as
@@ -309,6 +333,36 @@ func normalizeResultBody(body string) string {
 			}
 		}
 		root["visited_urls"] = urls
+	}
+	if rep, ok := root["reproduction"]; ok {
+		switch v := rep.(type) {
+		case map[string]any:
+			// keep; yaml decodes it into Reproduction
+		case string:
+			root["reproduction"] = map[string]any{"note": v}
+		default:
+			delete(root, "reproduction")
+		}
+	}
+	if f, ok := root["findings"]; ok {
+		// Only a list of maps decodes into []Finding; prose becomes one display
+		// finding so the model's note survives instead of failing the block.
+		if list, isList := f.([]any); isList {
+			var kept []any
+			for _, it := range list {
+				switch v := it.(type) {
+				case map[string]any:
+					kept = append(kept, v)
+				case string:
+					kept = append(kept, map[string]any{"kind": FindingDisplay, "where": "", "expected": "", "actual": "", "evidence": v})
+				}
+			}
+			root["findings"] = kept
+		} else if str, isStr := f.(string); isStr && strings.TrimSpace(str) != "" {
+			root["findings"] = []any{map[string]any{"kind": FindingDisplay, "evidence": strings.TrimSpace(str)}}
+		} else {
+			delete(root, "findings")
+		}
 	}
 	if e, ok := root["evidence"]; ok {
 		if _, isStr := e.(string); !isStr {

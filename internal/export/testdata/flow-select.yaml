@@ -1,0 +1,6 @@
+flow:
+  id: select-course
+  version: 1
+steps:
+  - click: { by: test_id, value: course-1 }
+  - wait_url: { contains: "/course/1" }

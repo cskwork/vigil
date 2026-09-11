@@ -1,0 +1,75 @@
+scenario:
+  id: export.all-steps
+  version: 3
+  title: "모든 스텝 타입 — it's a 'quote' test"
+  class: P1
+  mutation: read-only
+covers:
+  feature: export
+  capability: playwright-export
+uses: [login-as-student]
+browser:
+  popup: true
+steps:
+  - name: 대시보드 열기
+    goto: /dashboard?tab=1
+  - name: 강좌 카드 대기
+    wait_for: { by: test_id, value: course-card, timeout: 10s }
+  - click: { by: role, role: button, name: "열기", exact: true }
+  - hover: { by: css, value: "nav > a.menu" }
+  - fill: { by: label, name: "검색어", input: "it's \"quoted\"\nnext" }
+  - type: { by: id, value: "search-input", input: "abc" }
+  - press: Enter
+  - select: { by: css, value: "select#grade", option: "3" }
+  - wait_ms: 500
+  - wait_url: { contains: "/courses?x=1", timeout: 5s }
+  - assert_url: { matches: "^https://.*/courses/[0-9]+$" }
+  - assert_text: { value: "총 3건" }
+  - assert_text: { value: "제목", in: { by: test_id, value: title }, exact: true }
+  - assert_no_text: { value: "오류가 발생" }
+  - assert_visible: { by: text, text: "학습 시작", exact: true, nth: 1 }
+  - assert_not_visible: { by: href, value: "/logout" }
+  - assert_count: { by: css, value: "li.item", equals: 3 }
+  - assert_count: { by: css, value: "li.item", min: 1, max: 5, timeout: 3s }
+  - assert_request: { url_contains: "/api/courses", method: post, status: 200, timeout: 8s }
+  - assert_request: { url_contains: "/api/list", status_min: 200, status_max: 299, body_contains: "\"ok\":true" }
+  - assert_attr: { by: css, value: "a.next", attr: href, contains: "page=2" }
+  - assert_attr: { by: css, value: "input.agree", attr: checked }
+  - assert_attr: { by: test_id, value: badge, attr: data-state, equals: "done" }
+  - name: 새 탭 열기
+    click: { by: text, text: "새 창" }
+  - expect_popup: { url_contains: "/popup", timeout: 5s }
+  - eval:
+      script: "document.title"
+      expect: '"학습관"'
+  - eval:
+      script: "({ n: document.querySelectorAll('li').length })"
+      expect: '{"n": 3}'
+  - eval:
+      script: "window.scrollTo(0, 0)"
+  - screenshot: final
+  - assert_data:
+      ui: { by: test_id, value: total-count }
+      ui_regex: "총\\s*([0-9,]+)건"
+      api: { url_contains: "/api/summary", json_path: "$.data.items[*].count", method: GET }
+      compare: number
+  - assert_data:
+      ui: { by: css, value: ".name" }
+      api: { url_contains: "/api/summary", json_path: "$.data[\"full name\"]" }
+      compare: text
+  - assert_data:
+      ui: { by: css, value: ".desc" }
+      api: { url_contains: "/api/summary", json_path: "$.data.items[1].desc" }
+      compare: contains
+  - use_flow: select-course
+  - use_flow: missing-flow
+  - click: { by: role, role: fancywidget, name: "위젯" }
+  - click: { by: id, value: "weird id" }
+  - click: { value: "submit-btn" }
+  - click: { by: css, value: "a", timeout: bogus }
+assert:
+  no_uncaught_console_error: true
+  no_http_5xx: true
+  no_http_4xx_on: ["/api/", "/viewer-api/"]
+oracle:
+  source: spec

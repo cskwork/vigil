@@ -1,0 +1,43 @@
+[
+  {
+    "key": "PROJ-133",
+    "fields": {
+      "summary": "AI학습관 처방 카드가 두 번 표시됨",
+      "description": {
+        "type": "doc",
+        "version": 1,
+        "content": [
+          {"type": "paragraph", "content": [{"type": "text", "text": "재현 절차"}]},
+          {"type": "orderedList", "content": [
+            {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "교사로 입장"}]}]},
+            {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "AI학습관 탭을 "}, {"type": "text", "text": "클릭", "marks": [{"type": "strong"}]}]}]}
+          ]},
+          {"type": "paragraph", "content": [{"type": "text", "text": "기대: 카드 1개"}, {"type": "hardBreak"}, {"type": "text", "text": "실제: 카드 2개"}]}
+        ]
+      },
+      "status": {"name": "In Progress"},
+      "labels": ["frontend", "ai"],
+      "issuetype": {"name": "Bug"}
+    }
+  },
+  {
+    "key": "proj-134",
+    "fields": {
+      "summary": "Login page shows a blank footer",
+      "description": "Plain string description",
+      "status": {"name": "To Do"},
+      "labels": [],
+      "issuetype": {"name": "Task"}
+    }
+  },
+  {
+    "key": "PROJ-135",
+    "fields": {
+      "summary": "No description at all",
+      "description": null,
+      "status": {"name": "To Do"},
+      "labels": [],
+      "issuetype": {"name": "Bug"}
+    }
+  }
+]

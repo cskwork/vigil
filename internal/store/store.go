@@ -47,9 +47,34 @@ func Open(path string) (*Store, error) {
 
 // migrateColumns adds columns introduced after the first release to existing databases.
 func migrateColumns(db *sql.DB) error {
-	rows, err := db.Query(`PRAGMA table_info(runs)`)
+	for _, m := range migrations {
+		if err := addColumnIfMissing(db, m.table, m.column, m.ddl); err != nil {
+			return err
+		}
+	}
+	// indexes on migrated columns are created here, after the column is guaranteed
+	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS ix_runs_deploy ON runs(project_id, deploy_marker, id)`)
+	return err
+}
+
+// addColumnIfMissing is the idempotent migration helper: PRAGMA table_info,
+// then ALTER TABLE ... ADD COLUMN when the column is absent.
+func addColumnIfMissing(db *sql.DB, table, column, ddl string) error {
+	have, err := tableColumns(db, table)
 	if err != nil {
 		return err
+	}
+	if have[column] {
+		return nil
+	}
+	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, ddl))
+	return err
+}
+
+func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 	have := map[string]bool{}
@@ -59,18 +84,11 @@ func migrateColumns(db *sql.DB) error {
 		var notnull, pk int
 		var dflt sql.NullString
 		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			return err
+			return nil, err
 		}
 		have[name] = true
 	}
-	if !have["deploy_marker"] {
-		if _, err := db.Exec(`ALTER TABLE runs ADD COLUMN deploy_marker TEXT NOT NULL DEFAULT ''`); err != nil {
-			return err
-		}
-	}
-	// indexes on migrated columns are created here, after the column is guaranteed
-	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS ix_runs_deploy ON runs(project_id, deploy_marker, id)`)
-	return err
+	return have, rows.Err()
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -132,14 +150,22 @@ func (s *Store) SetRepoCursor(ctx context.Context, project, path, branch, sha st
 
 // ---- features ------------------------------------------------------------
 
-const featureCols = `id, project_id, status, latest_shipped_sha, shipped_at, changed_paths, routes, summary, source, readiness, ready_at, last_handled_sha, created_at, updated_at`
+const featureCols = `id, project_id, status, latest_shipped_sha, shipped_at, changed_paths, routes, summary, source, kind, ref, details, readiness, ready_at, last_handled_sha, created_at, updated_at`
+
+// featureKind normalises an event kind for storage: "" is a shipped change.
+func featureKind(kind string) string {
+	if kind == "" {
+		return model.FeatureKindShip
+	}
+	return kind
+}
 
 func scanFeature(sc interface{ Scan(...any) error }) (*model.Feature, error) {
 	var f model.Feature
 	var shipped, created, updated int64
 	var ready sql.NullInt64
 	var paths, routes, readiness string
-	if err := sc.Scan(&f.ID, &f.ProjectID, &f.Status, &f.LatestShippedSHA, &shipped, &paths, &routes, &f.Summary, &f.Source, &readiness, &ready, &f.LastHandledSHA, &created, &updated); err != nil {
+	if err := sc.Scan(&f.ID, &f.ProjectID, &f.Status, &f.LatestShippedSHA, &shipped, &paths, &routes, &f.Summary, &f.Source, &f.Kind, &f.Ref, &f.Details, &readiness, &ready, &f.LastHandledSHA, &created, &updated); err != nil {
 		return nil, err
 	}
 	f.ShippedAt = fromMs(shipped)
@@ -160,18 +186,18 @@ func (s *Store) UpsertFeature(ctx context.Context, project string, ev model.Feat
 	}
 	t := ms(now())
 	if existing == nil {
-		_, err = s.db.ExecContext(ctx, `INSERT INTO features(`+featureCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		_, err = s.db.ExecContext(ctx, `INSERT INTO features(`+featureCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			ev.FeatureID, project, ev.Status, ev.ShippedSHA, ms(ev.ShippedAt), jsonList(ev.ChangedPaths), jsonList(ev.Routes), ev.Summary, ev.Source,
-			string(model.ReadinessWaiting), nil, "", t, t)
+			featureKind(ev.Kind), ev.Ref, ev.Details, string(model.ReadinessWaiting), nil, "", t, t)
 		return true, err
 	}
 	if existing.LatestShippedSHA == ev.ShippedSHA {
 		return false, nil
 	}
 	_, err = s.db.ExecContext(ctx, `UPDATE features SET status=?, latest_shipped_sha=?, shipped_at=?, changed_paths=?, routes=?, summary=?, source=?,
-		readiness=?, ready_at=NULL, updated_at=? WHERE project_id=? AND id=?`,
+		kind=?, ref=?, details=?, readiness=?, ready_at=NULL, updated_at=? WHERE project_id=? AND id=?`,
 		ev.Status, ev.ShippedSHA, ms(ev.ShippedAt), jsonList(ev.ChangedPaths), jsonList(ev.Routes), ev.Summary, ev.Source,
-		string(model.ReadinessWaiting), t, project, ev.FeatureID)
+		featureKind(ev.Kind), ev.Ref, ev.Details, string(model.ReadinessWaiting), t, project, ev.FeatureID)
 	return true, err
 }
 
@@ -256,13 +282,14 @@ func (s *Store) RegisterManualRequest(ctx context.Context, project string, ev mo
 		}
 	}()
 
-	_, err = tx.ExecContext(ctx, `INSERT INTO features(`+featureCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err = tx.ExecContext(ctx, `INSERT INTO features(`+featureCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(project_id,id) DO UPDATE SET
 		status=excluded.status, latest_shipped_sha=excluded.latest_shipped_sha, shipped_at=excluded.shipped_at,
 		changed_paths=excluded.changed_paths, routes=excluded.routes, summary=excluded.summary, source=excluded.source,
+		kind=excluded.kind, ref=excluded.ref, details=excluded.details,
 		readiness=excluded.readiness, ready_at=excluded.ready_at, last_handled_sha=excluded.last_handled_sha, updated_at=excluded.updated_at`,
 		ev.FeatureID, project, ev.Status, ev.ShippedSHA, ms(ev.ShippedAt), jsonList(ev.ChangedPaths), jsonList(ev.Routes), ev.Summary, ev.Source,
-		string(model.ReadinessReady), ms(ev.ShippedAt), ev.ShippedSHA, t, t)
+		featureKind(ev.Kind), ev.Ref, ev.Details, string(model.ReadinessReady), ms(ev.ShippedAt), ev.ShippedSHA, t, t)
 	if err != nil {
 		return 0, false, err
 	}
@@ -297,17 +324,20 @@ func (s *Store) RegisterManualRequest(ctx context.Context, project string, ev mo
 // ---- scenarios -----------------------------------------------------------
 
 const scenarioCols = `id, project_id, state, fingerprint, title, class, mutation, locks, current_version, oracle_source, oracle_feature, oracle_sha,
- soak_passes, soak_target, last_outcome, last_run_at, last_pass_at, consecutive_failures, next_due_at, origin, created_at, updated_at`
+ soak_passes, soak_target, last_outcome, last_run_at, last_pass_at, consecutive_failures, next_due_at, origin,
+ source_ref, source_kind, reproduction, cadence, approved_at, created_at, updated_at`
 
 func scanScenario(sc interface{ Scan(...any) error }) (*model.Scenario, error) {
 	var m model.Scenario
 	var state, mutation, locks, lastOutcome string
-	var lastRun, lastPass, nextDue sql.NullInt64
+	var lastRun, lastPass, nextDue, approved sql.NullInt64
 	var created, updated int64
 	if err := sc.Scan(&m.ID, &m.ProjectID, &state, &m.Fingerprint, &m.Title, &m.Class, &mutation, &locks, &m.CurrentVersion, &m.OracleSource, &m.OracleFeature, &m.OracleSHA,
-		&m.SoakPasses, &m.SoakTarget, &lastOutcome, &lastRun, &lastPass, &m.ConsecutiveFailures, &nextDue, &m.Origin, &created, &updated); err != nil {
+		&m.SoakPasses, &m.SoakTarget, &lastOutcome, &lastRun, &lastPass, &m.ConsecutiveFailures, &nextDue, &m.Origin,
+		&m.SourceRef, &m.SourceKind, &m.Reproduction, &m.Cadence, &approved, &created, &updated); err != nil {
 		return nil, err
 	}
+	m.ApprovedAt = fromMsp(approved)
 	m.State = model.ScenarioState(state)
 	m.Mutation = model.Mutation(mutation)
 	m.Locks = parseList(locks)
@@ -337,10 +367,10 @@ func (s *Store) CreateScenario(ctx context.Context, m *model.Scenario, v *model.
 	if m.CurrentVersion == 0 {
 		m.CurrentVersion = v.Version
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO scenarios(`+scenarioCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = tx.ExecContext(ctx, `INSERT INTO scenarios(`+scenarioCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.ID, m.ProjectID, string(m.State), m.Fingerprint, m.Title, m.Class, string(m.Mutation), jsonList(m.Locks), m.CurrentVersion,
 		m.OracleSource, m.OracleFeature, m.OracleSHA, m.SoakPasses, m.SoakTarget, string(m.LastOutcome), msp(m.LastRunAt), msp(m.LastPassAt),
-		m.ConsecutiveFailures, msp(m.NextDueAt), m.Origin, t, t)
+		m.ConsecutiveFailures, msp(m.NextDueAt), m.Origin, m.SourceRef, m.SourceKind, m.Reproduction, m.Cadence, msp(m.ApprovedAt), t, t)
 	if err != nil {
 		return fmt.Errorf("insert scenario %s: %w", m.ID, err)
 	}
@@ -449,6 +479,36 @@ func (s *Store) ListDueScenarios(ctx context.Context, project string, at time.Ti
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// SetScenarioSource records the queue item a scenario reproduces (issue key / log signature hash).
+func (s *Store) SetScenarioSource(ctx context.Context, project, id, ref, kind string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE scenarios SET source_ref=?, source_kind=?, updated_at=? WHERE project_id=? AND id=?`, ref, kind, ms(now()), project, id)
+	return err
+}
+
+// SetScenarioPendingApproval parks a reproduce script for a human decision:
+// state PENDING_APPROVAL, the reproduction verdict JSON stored, never due.
+func (s *Store) SetScenarioPendingApproval(ctx context.Context, project, id, reproduction string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE scenarios SET state=?, reproduction=?, next_due_at=NULL, updated_at=? WHERE project_id=? AND id=?`,
+		string(model.StatePendingApproval), reproduction, ms(now()), project, id)
+	return err
+}
+
+// SetScenarioApproved promotes a script straight to ACTIVE on a named cadence
+// (approval workflow): soak counters reset, approved_at stamped, next due set.
+func (s *Store) SetScenarioApproved(ctx context.Context, project, id, cadence string, approvedAt, nextDue time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE scenarios SET state=?, cadence=?, approved_at=?, soak_passes=0, consecutive_failures=0, next_due_at=?, updated_at=?
+		WHERE project_id=? AND id=?`, string(model.StateActive), cadence, ms(approvedAt), ms(nextDue), ms(now()), project, id)
+	return err
+}
+
+// SetScenarioSoak restarts the soak path: state SOAK, counters reset, cadence
+// cleared, due at the given time.
+func (s *Store) SetScenarioSoak(ctx context.Context, project, id string, dueAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE scenarios SET state=?, cadence='', soak_passes=0, consecutive_failures=0, next_due_at=?, updated_at=?
+		WHERE project_id=? AND id=?`, string(model.StateSoak), ms(dueAt), ms(now()), project, id)
+	return err
 }
 
 func (s *Store) SetScenarioState(ctx context.Context, project, id string, st model.ScenarioState) error {
@@ -648,6 +708,14 @@ func scanJob(sc interface{ Scan(...any) error }) (*model.Job, error) {
 
 // EnqueueJob inserts a READY job unless an equivalent READY/LEASED job (same dedup key) exists.
 // dedupKey "" disables dedup. Returns the job id (existing or new) and whether it was created.
+// RaiseJobPriority lifts a READY job's priority (never lowers it): an operator
+// asking for work the loop already queued must not wait behind it.
+func (s *Store) RaiseJobPriority(ctx context.Context, id int64, priority int) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE jobs SET priority=?, updated_at=? WHERE id=? AND state='READY' AND priority<?`,
+		priority, ms(now()), id, priority)
+	return err
+}
+
 func (s *Store) EnqueueJob(ctx context.Context, j *model.Job, dedupKey string) (int64, bool, error) {
 	if dedupKey != "" {
 		var id int64
@@ -823,9 +891,9 @@ func (s *Store) CountJobs(ctx context.Context, project string, state model.JobSt
 // ---- runs ----------------------------------------------------------------
 
 func (s *Store) InsertRun(ctx context.Context, r *model.Run) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO runs(job_id, project_id, scenario_id, scenario_version, feature_id, shipped_sha, browser, outcome, attempt, started_at, finished_at, duration_ms, failed_step, failed_action, expected, actual, error, evidence_dir, deploy_marker)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		r.JobID, r.ProjectID, r.ScenarioID, r.ScenarioVersion, r.FeatureID, r.ShippedSHA, string(r.Browser), string(r.Outcome), r.Attempt, ms(r.StartedAt), ms(r.FinishedAt), r.DurationMs, r.FailedStep, r.FailedAction, r.Expected, r.Actual, r.Error, r.EvidenceDir, r.DeployMarker)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO runs(job_id, project_id, scenario_id, scenario_version, feature_id, shipped_sha, browser, outcome, attempt, started_at, finished_at, duration_ms, failed_step, failed_action, expected, actual, error, evidence_dir, deploy_marker, environment)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.JobID, r.ProjectID, r.ScenarioID, r.ScenarioVersion, r.FeatureID, r.ShippedSHA, string(r.Browser), string(r.Outcome), r.Attempt, ms(r.StartedAt), ms(r.FinishedAt), r.DurationMs, r.FailedStep, r.FailedAction, r.Expected, r.Actual, r.Error, r.EvidenceDir, r.DeployMarker, r.Environment)
 	if err != nil {
 		return 0, err
 	}
@@ -857,13 +925,13 @@ func (s *Store) AddRunArtifact(ctx context.Context, runID int64, kind, path stri
 	return err
 }
 
-const runCols = `id, job_id, project_id, scenario_id, scenario_version, feature_id, shipped_sha, browser, outcome, attempt, started_at, finished_at, duration_ms, failed_step, failed_action, expected, actual, error, evidence_dir, deploy_marker`
+const runCols = `id, job_id, project_id, scenario_id, scenario_version, feature_id, shipped_sha, browser, outcome, attempt, started_at, finished_at, duration_ms, failed_step, failed_action, expected, actual, error, evidence_dir, deploy_marker, environment`
 
 func scanRun(sc interface{ Scan(...any) error }) (*model.Run, error) {
 	var r model.Run
 	var browser, outcome string
 	var started, finished int64
-	if err := sc.Scan(&r.ID, &r.JobID, &r.ProjectID, &r.ScenarioID, &r.ScenarioVersion, &r.FeatureID, &r.ShippedSHA, &browser, &outcome, &r.Attempt, &started, &finished, &r.DurationMs, &r.FailedStep, &r.FailedAction, &r.Expected, &r.Actual, &r.Error, &r.EvidenceDir, &r.DeployMarker); err != nil {
+	if err := sc.Scan(&r.ID, &r.JobID, &r.ProjectID, &r.ScenarioID, &r.ScenarioVersion, &r.FeatureID, &r.ShippedSHA, &browser, &outcome, &r.Attempt, &started, &finished, &r.DurationMs, &r.FailedStep, &r.FailedAction, &r.Expected, &r.Actual, &r.Error, &r.EvidenceDir, &r.DeployMarker, &r.Environment); err != nil {
 		return nil, err
 	}
 	r.Browser = model.Browser(browser)
@@ -894,6 +962,34 @@ func (s *Store) ListRuns(ctx context.Context, project, scenarioID string, limit 
 			return nil, err
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RunsByID loads the given run ids in one query, keyed by id. Callers that
+// explain a list of incidents need their runs without one query per row.
+func (s *Store) RunsByID(ctx context.Context, project string, ids []int64) (map[int64]*model.Run, error) {
+	out := map[int64]*model.Run{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := []any{project}
+	holes := make([]string, 0, len(ids))
+	for _, id := range ids {
+		holes = append(holes, "?")
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+runCols+` FROM runs WHERE project_id=? AND id IN (`+strings.Join(holes, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[r.ID] = r
 	}
 	return out, rows.Err()
 }
@@ -948,7 +1044,6 @@ func (s *Store) LatestRunsForDeployment(ctx context.Context, project, marker str
 	return out, rows.Err()
 }
 
-// HasRunForDeployment reports whether a run of scenario on browser exists for marker.
 // HasPassOnBrowser reports whether this scenario has ever passed on the given engine.
 // Pinning a scenario to an engine it has never passed on is how a green check goes red
 // silently, so the importer consults this before honouring a new pin.
@@ -967,9 +1062,13 @@ func (s *Store) ResetSoak(ctx context.Context, project, scenario string) error {
 	return err
 }
 
-func (s *Store) HasRunForDeployment(ctx context.Context, project, scenario, marker string, browser model.Browser) (bool, error) {
+// HasRunForDeployment reports whether a run of scenario on browser exists for
+// marker in env. The environment is part of the key: two environments can serve the same
+// marker, and a capture on one must not suppress the capture on the other.
+func (s *Store) HasRunForDeployment(ctx context.Context, project, scenario, marker, env string, browser model.Browser) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE project_id=? AND scenario_id=? AND deploy_marker=? AND browser=?`, project, scenario, marker, string(browser)).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE project_id=? AND scenario_id=? AND deploy_marker=? AND environment=? AND browser=?`,
+		project, scenario, marker, env, string(browser)).Scan(&n)
 	return n > 0, err
 }
 

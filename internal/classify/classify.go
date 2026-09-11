@@ -39,6 +39,7 @@ type Input struct {
 //	popup, chromium                            → SCRIPT_DRIFT
 //	browser_protocol, chromium                 → ENV_FAILURE
 //	transport                                  → ENV_FAILURE
+//	environment (goto outside env allowlist)   → ENV_FAILURE
 //	auth                                       → AUTH_FAILURE
 //	timeout                                    → ENV_FAILURE when !TargetHealthy, else
 //	                                             BROWSER_AMBIGUOUS on lightpanda, SCRIPT_DRIFT on chromium
@@ -82,6 +83,14 @@ func Classify(in Input) (model.Outcome, string) {
 		if !in.TargetHealthy {
 			return model.OutcomeEnvFailure, fmt.Sprintf("%s failure while the target is unhealthy: %s", res.Class, where)
 		}
+		// Lightpanda cannot create or report a window.open target. On that engine "the page
+		// did not navigate" and "the page opened a tab I cannot see" are the same
+		// observation, and only the second one is a working application. Chromium has to
+		// say which it was before this counts as a stale script - otherwise the repair
+		// agent is asked to fix a script that was right all along.
+		if onLightpanda && res.Class == runner.FailNavigation {
+			return model.OutcomeBrowserAmbiguous, "navigation failure on lightpanda, which cannot observe a window.open target; chromium confirmation required: " + where
+		}
 		return model.OutcomeScriptDrift, fmt.Sprintf("%s failure on a healthy target: %s", res.Class, where)
 
 	case runner.FailPopup:
@@ -110,6 +119,9 @@ func Classify(in Input) (model.Outcome, string) {
 			return model.OutcomeBrowserAmbiguous, "timeout on lightpanda with a healthy target; chromium confirmation required: " + where
 		}
 		return model.OutcomeScriptDrift, "timeout on chromium with a healthy target: " + where
+
+	case runner.FailEnvironment:
+		return model.OutcomeEnvFailure, runner.ErrOutsideAllowlist + ": " + where
 
 	case runner.FailInternal:
 		return model.OutcomeNeedsReview, "runner internal failure: " + where

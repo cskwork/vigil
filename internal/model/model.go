@@ -14,11 +14,14 @@ const (
 	StateDuplicate   ScenarioState = "DUPLICATE"
 	StateEphemeral   ScenarioState = "EPHEMERAL"
 	StateNeedsReview ScenarioState = "NEEDS_REVIEW"
-	StateRejected    ScenarioState = "REJECTED"
-	StateQuarantined ScenarioState = "QUARANTINED"
-	StateMerged      ScenarioState = "MERGED"
-	StateSuperseded  ScenarioState = "SUPERSEDED"
-	StateRetired     ScenarioState = "RETIRED"
+	// StatePendingApproval: a reproduce script (Jira/Loki/exec source) validated and
+	// now waits for a human decision; never due (WI-D approval workflow).
+	StatePendingApproval ScenarioState = "PENDING_APPROVAL"
+	StateRejected        ScenarioState = "REJECTED"
+	StateQuarantined     ScenarioState = "QUARANTINED"
+	StateMerged          ScenarioState = "MERGED"
+	StateSuperseded      ScenarioState = "SUPERSEDED"
+	StateRetired         ScenarioState = "RETIRED"
 )
 
 // Outcome is the classified result of one run (PRD §13).
@@ -63,6 +66,7 @@ const (
 	ActionChromiumConfirm          Action = "CHROMIUM_CONFIRM"
 	ActionChromiumVerify           Action = "CHROMIUM_VERIFY"
 	ActionClassifyInfra            Action = "CLASSIFY_INFRA"
+	ActionReproduce                Action = "REPRODUCE" // queue-originated feature (issue/log): agent reproduces the symptom
 	ActionNone                     Action = "NO_ACTION"
 )
 
@@ -80,6 +84,7 @@ const (
 	JobAgentDiscover     JobKind = "AGENT_DISCOVER"
 	JobAgentVerify       JobKind = "AGENT_VERIFY"
 	JobAgentRepair       JobKind = "AGENT_REPAIR"
+	JobAgentReproduce    JobKind = "AGENT_REPRODUCE" // reproduce a reported symptom (issue/log feature)
 	JobChromiumConfirm   JobKind = "CHROMIUM_CONFIRM"
 	JobChromiumEvidence  JobKind = "CHROMIUM_EVIDENCE" // real-screen evidence capture, once per deployment
 	JobValidateCandidate JobKind = "VALIDATE_CANDIDATE"
@@ -110,6 +115,18 @@ const (
 	MutationReversible  Mutation = "reversible"
 	MutationDestructive Mutation = "destructive"
 )
+
+// Feature kinds: ship = a deployed change (git/file/sdlc adapters); issue = a
+// tracker item (jira / exec); log = an error-log signature (loki / exec).
+const (
+	FeatureKindShip  = "ship"
+	FeatureKindIssue = "issue"
+	FeatureKindLog   = "log"
+)
+
+// IsShipKind reports whether kind denotes a deployed change ("" counts as ship
+// for rows written before the kind column existed).
+func IsShipKind(kind string) bool { return kind == "" || kind == FeatureKindShip }
 
 // Priority: higher runs first (PRD §12).
 const (
@@ -155,8 +172,13 @@ type Feature struct {
 	Routes           []string
 	Summary          string
 	Source           string // adapter name
-	Readiness        Readiness
-	ReadyAt          *time.Time
+	// Kind is ship | issue | log (FeatureKind*); Ref is the issue key / log
+	// signature hash / exec key; Details is the bounded report text.
+	Kind      string
+	Ref       string
+	Details   string
+	Readiness Readiness
+	ReadyAt   *time.Time
 	// LastHandledSHA is the SHA for which the orchestrator already planned work.
 	LastHandledSHA string
 	CreatedAt      time.Time
@@ -184,8 +206,16 @@ type Scenario struct {
 	ConsecutiveFailures int
 	NextDueAt           *time.Time
 	Origin              string // agent | seed | import | human
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	// SourceRef / SourceKind identify the queue item (issue key, log signature) a
+	// reproduce script came from; Reproduction is the JSON verdict of its
+	// validation run. Cadence / ApprovedAt are set by the approval workflow.
+	SourceRef    string
+	SourceKind   string
+	Reproduction string // JSON {reproduced, at_step, symptom, run_id}
+	Cadence      string
+	ApprovedAt   *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type ScenarioVersion struct {
@@ -267,6 +297,8 @@ type Run struct {
 	EvidenceDir     string
 	// DeployMarker identifies the deployed build the run verified (asset version / release id).
 	DeployMarker string
+	// Environment names the target.environments entry the run executed against.
+	Environment string
 }
 
 type RunArtifact struct {
@@ -291,6 +323,24 @@ type Incident struct {
 	JSONPath        string
 	CreatedAt       time.Time
 	ResolvedAt      *time.Time
+}
+
+// Finding is one data-analyst observation the Browser Agent reported for a
+// scenario/feature (PRD WI-E): a value that disagrees with its API payload, a
+// domain-rule violation, a display or an accessibility defect.
+type Finding struct {
+	ID         int64
+	ProjectID  string
+	FeatureID  string
+	ScenarioID string
+	JobID      int64
+	Kind       string // data_mismatch | domain_rule | display | accessibility
+	Where      string
+	Expected   string
+	Actual     string
+	Evidence   string
+	State      string // OPEN | RESOLVED
+	CreatedAt  time.Time
 }
 
 type ResourceLock struct {
@@ -326,4 +376,7 @@ type FeatureEvent struct {
 	Routes       []string  `yaml:"routes" json:"routes"`
 	Summary      string    `yaml:"summary" json:"summary"`
 	Source       string    `yaml:"source,omitempty" json:"source,omitempty"`
+	Kind         string    `yaml:"kind,omitempty" json:"kind,omitempty"` // ship (default) | issue | log
+	Ref          string    `yaml:"ref,omitempty" json:"ref,omitempty"`
+	Details      string    `yaml:"details,omitempty" json:"details,omitempty"`
 }

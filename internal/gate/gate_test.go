@@ -33,7 +33,7 @@ func newGate(c *config.Config, now time.Time) *Gate {
 }
 
 func feature(shippedAt time.Time) *model.Feature {
-	return &model.Feature{ID: "PROJ-1", LatestShippedSHA: "6f22ff7a1dcc309395173a5d52aba5ae01ad769a", ShippedAt: shippedAt, Routes: []string{"/lms-web/training-entry"}}
+	return &model.Feature{ID: "PROJ-1", LatestShippedSHA: "6f22ff7a1dcc309395173a5d52aba5ae01ad769a", ShippedAt: shippedAt, Routes: []string{"/app/training-entry"}}
 }
 
 func TestDelayStrategy(t *testing.T) {
@@ -55,11 +55,11 @@ func TestAssetVersionStrategy(t *testing.T) {
 	var version atomic.Value
 	version.Store("1000")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/lms-web/training-entry" {
+		if r.URL.Path != "/app/training-entry" {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = io.WriteString(w, `<html><script type="module" src="/lms-web/assets/index.js?v=`+version.Load().(string)+`"></script></html>`)
+		_, _ = io.WriteString(w, `<html><script type="module" src="/app/assets/index.js?v=`+version.Load().(string)+`"></script></html>`)
 	}))
 	defer srv.Close()
 
@@ -151,3 +151,100 @@ func TestUnknownStrategy(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestIssueAndLogFeaturesAreReadyWithoutProbing(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte("nothing"))
+	}))
+	defer srv.Close()
+	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	for _, strategy := range []string{"delay", "asset_version", "version_endpoint"} {
+		c := newCfg(strategy)
+		c.Target.BaseURL = srv.URL
+		c.Deployment.Readiness.Endpoint = srv.URL + "/version"
+		c.Deployment.Readiness.AssetPage = srv.URL + "/"
+		g := newGate(c, now)
+		for _, kind := range []string{model.FeatureKindIssue, model.FeatureKindLog} {
+			f := &model.Feature{ID: "PROJ-123", Kind: kind, LatestShippedSHA: "jira:PROJ-123:abcd1234", ShippedAt: now}
+			state, marker, err := g.Check(context.Background(), f, "")
+			if err != nil || state != model.ReadinessReady || marker != "" {
+				t.Fatalf("%s/%s: %s %q %v", strategy, kind, state, marker, err)
+			}
+		}
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("non-ship features must not probe the target (hits=%d)", hits.Load())
+	}
+	// a ship feature shipped just now still waits under the delay policy
+	g := newGate(newCfg("delay"), now)
+	if state, _, _ := g.Check(context.Background(), feature(now), ""); state != model.ReadinessWaiting {
+		t.Fatalf("ship feature = %s", state)
+	}
+}
+
+// H-3: each environment has its own marker page, so a run can be tagged with the
+// build of the environment it actually verified.
+func TestCurrentMarkerPerEnvironment(t *testing.T) {
+	page := func(v string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`<script src="/assets/index.js?v=` + v + `"></script>`))
+		}))
+	}
+	stg, prod := page("1000"), page("2000")
+	defer stg.Close()
+	defer prod.Close()
+
+	c := newCfg("asset_version")
+	c.Target.DefaultEnv = "stg"
+	c.Target.Environments = map[string]config.Environment{
+		"stg":  {BaseURL: stg.URL, AssetPage: stg.URL + "/"},
+		"prod": {BaseURL: prod.URL, AssetPage: prod.URL + "/"},
+	}
+	g := newGate(c, time.Now())
+	ctx := context.Background()
+	envStg, _ := c.Env("stg")
+	envProd, _ := c.Env("prod")
+	got, err := g.CurrentMarkerFor(ctx, envStg)
+	if err != nil || got != "1000" {
+		t.Fatalf("stg marker = %q %v", got, err)
+	}
+	got, err = g.CurrentMarkerFor(ctx, envProd)
+	if err != nil || got != "2000" {
+		t.Fatalf("prod marker = %q %v (per-environment cache must not leak)", got, err)
+	}
+	if got, _ = g.CurrentMarker(ctx); got != "1000" {
+		t.Fatalf("default marker = %q, want the default environment's", got)
+	}
+}
+
+// Default-environment behaviour is unchanged when no environments are configured:
+// deployment.readiness.asset_page still decides the probed page.
+func TestCurrentMarkerWithoutEnvironments(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/app/training-entry" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`<script src="/assets/index.js?v=42"></script>`))
+	}))
+	defer srv.Close()
+	c := newCfg("asset_version")
+	c.Deployment.Readiness.AssetPage = srv.URL + "/app/training-entry"
+	g := newGate(c, time.Now())
+	if got, err := g.CurrentMarker(context.Background()); err != nil || got != "42" {
+		t.Fatalf("marker = %q %v", got, err)
+	}
+	if page := g.MarkerPageFor(c.DefaultEnv()); page != c.Deployment.Readiness.AssetPage {
+		t.Fatalf("marker page = %q", page)
+	}
+	// No asset_page at all: the environment's base URL plus the entry path.
+	c2 := newCfg("asset_version")
+	c2.Targets = []config.Target{{URL: "https://example.test/app/training-entry", Path: "/app/training-entry"}}
+	if page := gate2Page(c2); page != "https://example.test/app/training-entry" {
+		t.Fatalf("fallback page = %q", page)
+	}
+}
+
+func gate2Page(c *config.Config) string { return New(c).MarkerPageFor(c.DefaultEnv()) }

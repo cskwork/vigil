@@ -50,6 +50,8 @@ type Plan struct {
 	RawTranscriptPath string        `yaml:"-" json:"raw_transcript_path,omitempty"`
 	Duration          time.Duration `yaml:"-" json:"duration"`
 	ModelUnavailable  bool          `yaml:"-" json:"model_unavailable"`
+	// Model is the chain entry (provider/model) that answered.
+	Model string `yaml:"-" json:"model,omitempty"`
 }
 
 const supervisorSystemPrompt = `You are the vigil Supervisor: a bounded planning subagent for a continuous browser-QA system.
@@ -219,36 +221,110 @@ func (p *pi) Plan(ctx context.Context, briefing, evidenceDir string) (*Plan, err
 		p.logger.Printf("supervisor sandbox: %s", w)
 	}
 	env := append(p.env("supervisor", evidenceDir), sb.Env...)
-	argv := sb.Argv(p.piPath, "-p", "--mode", "json", "--no-session",
-		"--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--approve", "--no-tools",
-		"--provider", p.provider,
-		"--model", sup.EffectiveModel(p.model),
-		"--thinking", sup.EffectiveThinking(p.cfg.Agent.Thinking),
-		"--system-prompt", sys,
-		"--", task)
 
 	start := time.Now()
 	transcriptPath := filepath.Join(evidenceDir, FileTranscript)
-	tr, stderr, _, _, err := p.runOnce(ctx, argv, env, evidenceDir, transcriptPath, 1, timeout, 0)
-	out := &Plan{RawTranscriptPath: transcriptPath, Duration: time.Since(start)}
-	if err != nil || tr == nil {
-		// Same contract as the Browser Agent: a provider outage must not stop
-		// deterministic QA, so this is reported, not fatal (rule 12).
-		out.ModelUnavailable = true
-		if err == nil {
-			err = fmt.Errorf("agent: supervisor produced no transcript: %s", strings.TrimSpace(stderr))
+	out := &Plan{RawTranscriptPath: transcriptPath}
+	entries := p.planEntries()
+	var excluded []string // entries cooled down during this tick
+	for {
+		entry, ok := p.chain.NextFrom(entries, excluded...)
+		if !ok {
+			// Same contract as the Browser Agent: a provider outage must not stop
+			// deterministic QA, so this is reported, not fatal (rule 12).
+			out.ModelUnavailable, out.Duration = true, time.Since(start)
+			return out, fmt.Errorf("agent: supervisor: model unavailable, every chain entry is cooling down (%s)", strings.Join(entryNames(entries), ", "))
 		}
-		return out, err
-	}
-	parsed, perr := ParsePlan(tr.AssistantText)
-	if perr != nil {
+		argv := sb.Argv(p.piPath, "-p", "--mode", "json", "--no-session",
+			"--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--approve", "--no-tools",
+			"--provider", entry.Provider,
+			"--model", entry.Model,
+			"--thinking", entry.Thinking,
+			"--system-prompt", sys,
+			"--", task)
+		tr, stderr, _, _, err := p.runOnce(ctx, argv, env, evidenceDir, transcriptPath, len(excluded)+1, timeout, 0)
+		if ctx.Err() != nil {
+			return out, ctx.Err()
+		}
+		out.Model, out.Duration = entry.Name(), time.Since(start)
+		failed := err != nil || tr == nil
+		var parsed *Plan
+		var perr error
+		if !failed {
+			if parsed, perr = ParsePlan(tr.AssistantText); perr == nil {
+				parsed.RawTranscriptPath = transcriptPath
+				parsed.Duration = time.Since(start)
+				parsed.Model = entry.Name()
+				if b, err := yaml.Marshal(parsed); err == nil {
+					_ = os.WriteFile(filepath.Join(evidenceDir, "plan.yaml"), b, 0o644)
+				}
+				return parsed, nil
+			}
+		}
+		errText := stderr
+		if tr != nil {
+			errText = strings.TrimSpace(strings.Join([]string{tr.ErrorMessage, stderr}, "\n"))
+		}
+		if err != nil && errText == "" {
+			errText = err.Error()
+		}
+		if kind, reason := providerErrorReason(errText); kind != "" {
+			// Switch only when another entry is available right now; the supervisor
+			// has no retry budget, so without an alternative the entry is left for
+			// Run's retry loop rather than cooled down on one failure.
+			if next, more := p.chain.NextFrom(entries, append(append([]string{}, excluded...), entry.Name())...); more {
+				p.chain.MarkUnavailable(entry.Name(), reason)
+				excluded = append(excluded, entry.Name())
+				p.logger.Printf("agent: %s unavailable (%s); switching to %s", entry.Name(), reason, next.Name())
+				continue
+			}
+			out.ModelUnavailable = true
+			return out, fmt.Errorf("agent: supervisor: model unavailable (%s) and no alternative chain entry is available", reason)
+		}
+		if failed {
+			out.ModelUnavailable = true
+			if err == nil {
+				err = fmt.Errorf("agent: supervisor produced no transcript: %s", strings.TrimSpace(stderr))
+			}
+			return out, err
+		}
 		_ = os.WriteFile(filepath.Join(evidenceDir, "plan-unparsed.txt"), []byte(p.redactor.Redact(tr.AssistantText)), 0o644)
 		return out, perr
 	}
-	parsed.RawTranscriptPath = transcriptPath
-	parsed.Duration = time.Since(start)
-	if b, err := yaml.Marshal(parsed); err == nil {
-		_ = os.WriteFile(filepath.Join(evidenceDir, "plan.yaml"), b, 0o644)
+}
+
+// planEntries is the supervisor's view of the chain: supervisor.model (when set)
+// first, then the shared chain, all with supervisor.thinking when that is set.
+// Cooldown state is shared with Run, so a 429 in one loop protects the other.
+func (p *pi) planEntries() []ModelEntry {
+	sup := p.cfg.Supervisor
+	entries := p.chain.Entries()
+	if sup.Thinking != "" {
+		for i := range entries {
+			entries[i].Thinking = sup.Thinking
+		}
 	}
-	return parsed, nil
+	if sup.Model == "" {
+		return entries
+	}
+	pinned, err := ParseModelEntry(sup.Model, sup.EffectiveThinking(p.cfg.Agent.Thinking))
+	if err != nil {
+		p.logger.Printf("WARN supervisor.model %q ignored: %v", sup.Model, err)
+		return entries
+	}
+	out := []ModelEntry{pinned}
+	for _, e := range entries {
+		if e.Name() != pinned.Name() {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func entryNames(entries []ModelEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
 }

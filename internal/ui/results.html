@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="ko" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>검증 결과, QA 현황판</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="/ui/theme.css">
+</head>
+<body>
+<a class="skiplink" href="#main">본문으로 건너뛰기</a>
+<div class="shell">
+  <nav class="rail" aria-label="주 메뉴">
+    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <a href="/">할 일</a>
+    <a href="/results" class="active" aria-current="page">검증 결과 <span class="cnt" id="nBad"></span></a>
+    <a href="/scripts">검사 스크립트</a>
+    <a href="/activity">시스템 활동</a>
+    <a href="/help">도움말</a>
+    <div class="rail-foot">
+      <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
+      <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
+      <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
+    </div>
+  </nav>
+  <div class="content">
+    <header class="topbar">
+      <div class="crumbs">QA 현황판 &rsaquo; <b>검증 결과</b></div>
+      <div class="search"><input type="search" id="q" placeholder="검사 항목 검색" aria-label="검사 항목 검색"></div>
+      <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
+    </header>
+    <main id="main" tabindex="-1">
+      <div id="fetchErr"></div>
+      <p class="purpose">이번 배포에서 무엇이 확인됐고 무엇이 실패했는지 봅니다.</p>
+
+      <section aria-label="요약">
+        <div class="kpis" id="kpis">
+          <article class="kpi north"><h3>서비스 상태</h3><div class="value"><div class="skel" style="width:60%"></div></div><p class="delta">불러오는 중</p></article>
+          <article class="kpi"><h3>이 배포에서 검증</h3><div class="skel"></div></article>
+          <article class="kpi"><h3>아직 검증 안 됨</h3><div class="skel"></div></article>
+          <article class="kpi"><h3>마지막 검증</h3><div class="skel"></div></article>
+          <article class="kpi"><h3>배포 확인 시각</h3><div class="skel"></div></article>
+        </div>
+      </section>
+
+      <section class="panel" id="issues" aria-label="발견된 문제"><div class="body" id="issuesBody"></div></section>
+
+      <section class="panel" id="verify" aria-label="이 배포에서 검증한 것">
+        <header><h2>이 배포에서 검증한 것</h2><p>결과별로 묶어 보여 줍니다. 묶음 제목을 누르면 펼쳐집니다.</p></header>
+        <div class="deploy-head" id="deployHead"><div class="skel" style="width:40%"></div></div>
+        <div class="toolbar"><div class="chips" id="chips" role="group" aria-label="결과 묶음 선택"></div><span class="count" id="checkCount" aria-live="polite"></span></div>
+        <div class="body" id="groups"><div class="skel"></div><div class="skel"></div></div>
+        <div class="body"><div class="legend" id="legend"></div></div>
+      </section>
+
+      <section class="panel" id="requests" aria-label="사람이 넣은 확인 요청" hidden>
+        <header><h2>사람이 넣은 확인 요청</h2><p>할 일 화면에서 적어 넘긴 요청을 AI가 확인한 결과와 증거</p></header>
+        <div class="body" id="requestsBody"></div>
+      </section>
+
+      <section class="panel" aria-label="배포 이력">
+        <details id="deployDetails">
+          <summary class="disclose">
+            <span class="caret" aria-hidden="true">▸</span>
+            <span class="glabel">배포 이력</span><span class="gn" id="deployCount">0건</span>
+            <span class="sub">배포마다 몇 건을 검사했는지 봅니다. 줄을 누르면 그 배포의 결과로 바뀝니다.</span>
+          </summary>
+          <div class="body">
+            <table>
+              <caption class="sr-only">배포별 검증 요약</caption>
+              <thead><tr><th scope="col">배포</th><th scope="col" class="hide-sm">처음 확인</th><th scope="col">마지막 검증</th><th scope="col" class="num">검사 / 정상</th><th scope="col" class="num hide-sm">항목</th></tr></thead>
+              <tbody id="deployRows"><tr><td colspan="5"><div class="skel"></div></td></tr></tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/ui/app.js"></script>
+<script>
+const markerLabel = (m) => { const n = Number(m); return isFinite(n) && n > 1e12 ? `배포 ${new Date(n).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} 빌드` : `배포 ${m}`; };
+
+// Outcome groups, in the order a reader should work through them.
+const GROUPS = [
+  { key: 'bad', label: '문제 있음', hint: '약속과 다르게 동작했습니다. 개발팀 확인이 필요합니다.', outcomes: ['APP_FAILURE'] },
+  { key: 'review', label: '확인 필요', hint: '자동으로 판단하지 못했습니다. 사람이 봐야 합니다.', outcomes: ['NEEDS_REVIEW', 'ORACLE_UNKNOWN', 'BROWSER_AMBIGUOUS', 'SCRIPT_DRIFT', 'LIGHTPANDA_INCOMPATIBLE'] },
+  { key: 'env', label: '환경 문제', hint: '서비스가 아니라 검사 환경(네트워크, 로그인, 데이터) 문제입니다.', outcomes: ['ENV_FAILURE', 'AUTH_FAILURE', 'DATA_FAILURE'] },
+  { key: 'pass', label: '정상', hint: '약속대로 동작했습니다. 할 일이 없습니다.', outcomes: ['PASS', 'QA_FLAKE'] },
+  { key: 'none', label: '아직 실행 안 됨', hint: '이 배포에서는 아직 돌지 않았습니다. 정해진 주기에 자동 실행됩니다.', outcomes: ['DEPLOYMENT_NOT_READY'] },
+];
+const groupOf = (c) => {
+  if (c.not_verified) return 'none';
+  const g = GROUPS.find(g => g.outcomes.includes(c.outcome));
+  return g ? g.key : 'review';
+};
+const PAGE_SIZE = 20;
+
+const params = new URLSearchParams(location.search);
+let data = null, marker = params.get('marker') || '', outcome = params.get('outcome') || '',
+  groupFilter = params.get('group') || 'all', openRow = null, tab = 'steps', query = '',
+  shown = {}, openGroups = null;
+
+$('q').oninput = (e) => { query = e.target.value.trim().toLowerCase(); shown = {}; render(); };
+$('deployDetails').open = localStorage.getItem('vigil.deploys') === 'open';
+$('deployDetails').addEventListener('toggle', () => localStorage.setItem('vigil.deploys', $('deployDetails').open ? 'open' : 'closed'));
+
+function syncURL() {
+  const p = new URLSearchParams();
+  if (marker) p.set('marker', marker);
+  if (outcome) p.set('outcome', outcome);
+  if (groupFilter && groupFilter !== 'all') p.set('group', groupFilter);
+  history.replaceState(null, '', p.toString() ? '?' + p.toString() : location.pathname);
+}
+
+const poll = poller({
+  url: () => '/api/verification' + (marker ? '?marker=' + encodeURIComponent(marker) : ''),
+  every: 5000,
+  onData: (d, changed) => { data = d; marker = d.marker || ''; setTarget(d.target); if (changed) render(); },
+  tick: { every: 30000, fn: () => { if (data) render(); } },
+});
+
+function render() {
+  const o = data; if (!o) return;
+  const checks = o.checks || [], deps = o.deployments || [], incs = o.incidents || [];
+  const verified = checks.filter(c => !c.not_verified), pass = verified.filter(c => c.outcome === 'PASS' || c.outcome === 'QA_FLAKE');
+  const failing = verified.filter(c => c.outcome === 'APP_FAILURE'), infra = verified.filter(c => ['ENV_FAILURE', 'AUTH_FAILURE', 'DATA_FAILURE'].includes(c.outcome));
+  const dep = deps.find(d => d.marker === marker);
+  const last = verified.map(c => c.finished_at).sort().reverse()[0];
+  railCount('nBad', failing.length);
+  let tone = 'idle', head = '검증 결과 없음', sub = '아직 이 배포에서 실행된 검사가 없습니다.';
+  if (incs.length || failing.length) { tone = 'bad'; head = '문제 있음'; sub = `${incs.length || failing.length}건이 약속과 다르게 동작했습니다.`; }
+  else if (verified.length && infra.length) { tone = 'warn'; head = '검사 환경 문제'; sub = `${infra.length}건은 서비스가 아니라 검사 환경(네트워크, 로그인) 문제입니다.`; }
+  else if (verified.length && pass.length === verified.length) { tone = 'ok'; head = '정상'; sub = `검증한 ${verified.length}개 항목 모두 약속대로 동작했습니다.`; }
+  else if (verified.length) { tone = 'warn'; head = '확인 필요'; sub = `${verified.length - pass.length}건은 재확인이나 검사 수정이 필요합니다.`; }
+  const KT = {
+    north: '지금 이 배포를 한 문장으로 요약한 값입니다. 문제가 하나라도 있으면 문제 있음으로 바뀝니다.',
+    verified: '이 배포에서 실제로 실행된 검사 중 통과한 수입니다.',
+    notrun: '검사 절차는 있지만 이 배포에서는 아직 실행되지 않은 수입니다.',
+    last: '가장 마지막으로 검사가 끝난 시각입니다.',
+    dep: '이 배포가 처음 확인된 시각입니다. 배포 표시(마커)가 바뀐 순간입니다.',
+  };
+  $('kpis').innerHTML = `
+    <article class="kpi north ${tone}"><h3>${tip('서비스 상태', KT.north)}</h3><div class="value">${st({ ok: [head, 'ok'], bad: [head, 'bad'], warn: [head, 'warn'], idle: [head, 'muted'] }, tone)}</div><p class="delta">${esc(sub)}</p></article>
+    <article class="kpi"><h3>${tip('이 배포에서 검증', KT.verified)}</h3><div class="value">${pass.length}<small>/ ${verified.length} 정상</small></div><p class="delta">검사 항목 ${checks.length}개 중</p></article>
+    <article class="kpi"><h3>${tip('아직 검증 안 됨', KT.notrun)}</h3><div class="value">${checks.length - verified.length}</div><p class="delta">${checks.length - verified.length ? '정해진 주기에 자동 실행됩니다' : '모든 항목이 이 배포에서 실행됨'}</p></article>
+    <article class="kpi"><h3>${tip('마지막 검증', KT.last)}</h3><div class="value">${last ? when(last) : '<small>없음</small>'}</div><p class="delta">${last ? ago(last) : ''}</p></article>
+    <article class="kpi"><h3>${tip('배포 확인 시각', KT.dep)}</h3><div class="value">${dep ? hm(dep.first_seen) : '<small>없음</small>'}</div><p class="delta">${dep ? esc(ymd(dep.first_seen)) + ' · 검사 ' + dep.runs + '회' : ''}</p></article>`;
+
+  const findingsNote = o.open_findings ? `<div class="sub" style="padding:0 0 6px">데이터 발견 사항 <span class="st st-warn"><i></i>미해결 ${o.open_findings}건</span> <span class="sub">(검사 스크립트 상세에서 확인, 터미널: <span class="mono">vigil findings</span>)</span></div>` : '';
+  $('issuesBody').innerHTML = findingsNote + (incs.length ? `<div class="agent-head"><b>발견된 문제 ${incs.length}건</b></div><table><caption class="sr-only">미해결 문제 목록</caption><tbody>${incs.map(i => `<tr><td class="t">${i.md_rel ? `<a href="/evidence/${esc(i.md_rel)}" target="_blank" rel="noopener">${esc(incTitle(i.title))}</a>` : esc(incTitle(i.title))}${causeHTML(i, 'inc' + i.id)}</td><td class="fit">${st(INCIDENT, i.kind)}</td><td class="hide-sm fit">${esc(i.created_at)} <span class="sub">(${ago(i.created_at)})</span></td></tr>`).join('')}</tbody></table>`
+    : `<div class="empty" style="padding:8px 0"><b>확인된 문제가 없습니다</b>문제가 확인되면 재현 절차와 증거가 여기에 정리됩니다.</div>`);
+
+  $('deployHead').innerHTML = marker ? `<span>${esc(markerLabel(marker))}</span><span class="mk">${esc(marker)}</span>${dep ? `<span class="sub">처음 확인 ${esc(dep.first_seen)} · 마지막 검증 ${esc(dep.last_seen)}</span>` : ''}<div class="actions"><a class="btn" href="/report?marker=${encodeURIComponent(marker)}" target="_blank" rel="noopener">리포트 열기</a><button class="btn primary" id="copyMd">Markdown 복사</button></div>`
+    : '<span class="sub">아직 배포 표시(마커)가 기록된 검사가 없습니다.</span>';
+  const cm = $('copyMd'); if (cm) cm.onclick = copyMarkdown;
+
+  // filters: group chips plus an exact-outcome filter that a link can set
+  const matches = (c) => (!outcome || (outcome === 'NOT_RUN' ? c.not_verified : c.outcome === outcome))
+    && (!query || (c.title || '').toLowerCase().includes(query) || c.scenario_id.toLowerCase().includes(query));
+  const pool = checks.filter(matches);
+  const counts = { all: pool.length };
+  for (const c of pool) counts[groupOf(c)] = (counts[groupOf(c)] || 0) + 1;
+  $('chips').innerHTML = [['all', '전체'], ...GROUPS.map(g => [g.key, g.label])].map(([k, l]) =>
+    `<button type="button" data-f="${k}" aria-pressed="${groupFilter === k}">${esc(l)}<span class="n">${counts[k] || 0}</span></button>`).join('')
+    + (outcome ? `<button type="button" class="clearable" id="clearOutcome">결과: ${esc((OUTCOME[outcome] || [outcome === 'NOT_RUN' ? '아직 실행 안 됨' : outcome])[0])} <span aria-hidden="true">✕</span><span class="sr-only">이 결과 필터 해제</span></button>` : '');
+  $('chips').querySelectorAll('button[data-f]').forEach(b => b.onclick = () => { groupFilter = b.dataset.f; shown = {}; syncURL(); render(); });
+  const co = $('clearOutcome'); if (co) co.onclick = () => { outcome = ''; shown = {}; syncURL(); render(); };
+  $('checkCount').textContent = pool.length === checks.length ? `${checks.length}개` : `${pool.length}개 표시 · 전체 ${checks.length}개`;
+
+  // groups: collapsed by default, except the first problem group that has rows
+  const visible = GROUPS.filter(g => groupFilter === 'all' || groupFilter === g.key);
+  const firstProblem = GROUPS.find(g => ['bad', 'review', 'env'].includes(g.key) && pool.some(c => groupOf(c) === g.key));
+  if (openGroups === null) {
+    openGroups = new Set();
+    for (const g of GROUPS) if (groupOpen('results', g.key, firstProblem ? g.key === firstProblem.key : false)) openGroups.add(g.key);
+  }
+  $('groups').innerHTML = visible.map(g => {
+    const rows = pool.filter(c => groupOf(c) === g.key);
+    const open = openGroups.has(g.key) && rows.length > 0;
+    const limit = shown[g.key] || PAGE_SIZE;
+    const page = rows.slice(0, limit);
+    return `<section class="group${open ? ' open' : ''}">
+      <h3><button type="button" class="group-head" data-g="${g.key}" aria-expanded="${open}" ${rows.length ? '' : 'disabled'}>
+        <span class="caret" aria-hidden="true">${open ? '▾' : '▸'}</span>
+        <span class="glabel">${esc(g.label)}</span><span class="gn">${rows.length}건</span>
+        <span class="sub">${esc(g.hint)}</span></button></h3>
+      ${open ? `<table class="checks">
+        <caption class="sr-only">${esc(g.label)} 검사 목록</caption>
+        <thead><tr><th scope="col">검사 항목</th><th scope="col" class="fit">결과</th><th scope="col" class="hide-sm">증거</th><th scope="col" class="hide-sm fit">검증 시각</th><th scope="col" class="fit">증거 상세</th></tr></thead>
+        <tbody>${page.map(c => rowHTML(c)).join('')}</tbody></table>
+        ${rows.length > page.length ? `<div class="more"><button class="btn" data-more="${g.key}">더 보기 (+${rows.length - page.length})</button></div>` : ''}`
+      : (rows.length ? '' : `<div class="empty ghost">${esc(g.label)}에 해당하는 검사가 없습니다.</div>`)}
+    </section>`;
+  }).join('') || '<div class="empty"><b>조건에 맞는 검사 항목이 없습니다</b>검색어나 묶음 선택을 바꿔 보세요.</div>';
+
+  bindCause($('groups'));
+  bindCause($('issuesBody'));
+  $('groups').querySelectorAll('.group-head').forEach(b => b.onclick = () => {
+    const k = b.dataset.g;
+    if (openGroups.has(k)) openGroups.delete(k); else openGroups.add(k);
+    setGroupOpen('results', k, openGroups.has(k));
+    render();
+  });
+  $('groups').querySelectorAll('[data-more]').forEach(b => b.onclick = () => { const k = b.dataset.more; shown[k] = (shown[k] || PAGE_SIZE) + PAGE_SIZE; render(); });
+  $('groups').querySelectorAll('button[data-detail]').forEach(b => b.onclick = () => {
+    openRow = openRow === b.dataset.detail ? null : b.dataset.detail;
+    render();
+    const back = document.querySelector(`button[data-detail="${CSS.escape(openRow || '')}"]`); if (back) back.focus();
+  });
+  document.querySelectorAll('.tabs button').forEach(b => b.onclick = (e) => { e.stopPropagation(); tab = b.dataset.tab; render(); });
+  const openCheck = checks.find(c => c.scenario_id === openRow); if (openCheck && $('detail')) loadDetail(openCheck.evidence_rel);
+
+  $('legend').innerHTML = `${st(OUTCOME, 'PASS')} 약속대로 동작 &nbsp; ${st(OUTCOME, 'APP_FAILURE')} 약속과 다르게 동작, 개발팀 확인 &nbsp; ${st(OUTCOME, 'SCRIPT_DRIFT')} 화면 구조가 바뀌어 검사 수정 &nbsp; ${st(OUTCOME, 'ENV_FAILURE')} 검사 환경 문제 &nbsp; <a href="/help">용어 설명</a>`;
+
+  $('deployCount').textContent = `${deps.length}건`;
+  $('deployRows').innerHTML = deps.length ? deps.map(d => `<tr class="click${d.marker === marker ? ' sel' : ''}" data-marker="${esc(d.marker)}" aria-pressed="${d.marker === marker}"><td><div class="t">${esc(markerLabel(d.marker))}</div><div class="sub mono">${esc(d.marker)}</div></td><td class="hide-sm">${esc(d.first_seen)}</td><td>${esc(d.last_seen)}<div class="sub">${ago(d.last_seen)}</div></td><td class="num">${d.runs} / ${d.passes}</td><td class="num hide-sm">${d.scenarios}</td></tr>`).join('')
+    : `<tr><td colspan="5" class="empty"><b>배포 이력이 없습니다</b>배포 표시(assets/index.js?v=)가 확인되면 기록됩니다.</td></tr>`;
+  bindRows('#deployRows tr.click', tr => { marker = tr.dataset.marker; openRow = null; syncURL(); poll.refresh(); });
+}
+
+function rowHTML(c) {
+  const ev = c.not_verified ? '' : `<span class="evi"><span class="${c.screenshot ? 'has' : ''}">화면 캡처${c.screenshot && c.browser === 'lightpanda' ? ' (텍스트)' : ''}</span><span class="${c.steps ? 'has' : ''}">단계 ${c.steps}</span><span class="${c.requests ? 'has' : ''}">서버 응답 ${c.requests}</span>${c.console_errors ? `<span class="has">콘솔 오류 ${c.console_errors}</span>` : ''}</span>`;
+  const evi = ev ? `<p class="sub cause-evi">${ev}</p>` : '';
+  const why = !c.not_verified ? causeHTML(c, c.scenario_id, evi) : '';
+  const open = openRow === c.scenario_id;
+  const row = `<tr class="${open ? 'sel' : ''}"><td class="title"><div class="t">${esc(c.title || c.scenario_id)}</div><div class="sub">${esc(CLASS[c.class] || c.class)}${c.browser ? ` · ${esc(BROWSER[c.browser] || c.browser)}` : ''} ${envBadge(c.environment)} ${dev(c.scenario_id + (c.version ? ' v' + c.version : '') + (c.run_id ? ' run#' + c.run_id : ''))}</div>${why}</td>
+    <td class="st-cell">${c.not_verified ? '<span class="sub">-</span>' : stTip(OUTCOME, c.outcome)}</td>
+    <td class="hide-sm">${ev}</td>
+    <td class="hide-sm when">${c.finished_at ? when(c.finished_at) + `<div class="sub">${ago(c.finished_at)}</div>` : ''}</td>
+    <td class="fit">${c.not_verified ? '' : `<button class="btn" data-detail="${esc(c.scenario_id)}" aria-expanded="${open}">${open ? '접기' : '증거 보기'}</button>`}</td></tr>`;
+  const det = open ? `<tr class="detail-row"><td colspan="5"><div class="tabs" role="tablist">${[['steps', '단계'], ['shots', '화면 캡처'], ['net', '서버 응답'], ['console', '콘솔']].map(([k, l]) => `<button role="tab" aria-selected="${tab === k}" data-tab="${k}">${l}</button>`).join('')}</div><div id="detail"><div class="skel"></div></div><p class="sub dev">${c.environment ? `환경: ${esc(c.environment)} · ` : ''}증적: <a href="/evidence/${esc(c.evidence_rel)}/" target="_blank" rel="noopener">${esc(c.evidence_rel)}</a></p></td></tr>` : '';
+  return row + det;
+}
+
+// ---- manual requests (own poll; they change on a different clock) ----------
+let reqData = null, reqOpen = null;
+const reqPoll = poller({ url: '/api/requests', every: 10000, onData: (d, changed) => { reqData = d; if (changed) renderRequests(); }, onError: () => {} });
+function renderRequests() {
+  const list = (reqData && reqData.requests) || [];
+  const sec = $('requests'); sec.hidden = !list.length; if (!list.length) return;
+  $('requestsBody').innerHTML = list.map(q => `
+    <div class="request">
+      <div class="agent-head"><b>${esc(q.summary || q.feature_id)}</b>${st(REQ_STATUS, q.status)}${q.decision ? st(DECISION, q.decision) : ''}<span class="sub">${esc(q.requested_at)}${q.duration ? ` · ${esc(q.duration)}` : ''}${q.tool_calls ? ` · 브라우저 조작 ${q.tool_calls}회` : ''}${q.candidates ? ` · 제안 스크립트 ${q.candidates}개` : ''}</span><button class="btn" data-req="${esc(q.feature_id)}" aria-expanded="${reqOpen === q.feature_id}">${reqOpen === q.feature_id ? '접기' : '결과 보기'}</button></div>
+      ${reqOpen === q.feature_id ? `
+        ${q.error ? `<div class="errbox">${esc(q.error)}</div>` : ''}
+        ${q.reason ? `<p class="sub">${esc(q.reason)}</p>` : ''}
+        ${q.evidence ? `<div class="msg">${esc(q.evidence)}</div>` : '<div class="empty">아직 결과 텍스트가 없습니다.</div>'}
+        ${(q.screenshots || []).length ? `<div class="shots">${q.screenshots.map(s => `<figure><a href="/evidence/${esc(s)}" target="_blank" rel="noopener"><img src="/evidence/${esc(s)}" alt="요청 수행 화면" loading="lazy"></a><figcaption>${esc(s.split('/').pop())}</figcaption></figure>`).join('')}</div>` : ''}
+        ${q.gate ? `<details class="dev" data-key="gate:${esc(q.feature_id)}"><summary class="sub">후보 검증 결과(gate.json)</summary><pre class="yaml">${esc(q.gate)}</pre></details>` : ''}
+        <p class="sub dev">증적 폴더: <a href="/evidence/${esc(q.dir)}/" target="_blank" rel="noopener">${esc(q.dir)}</a></p>` : ''}
+    </div>`).join('');
+  keepDetails($('requestsBody'));
+  document.querySelectorAll('#requestsBody button[data-req]').forEach(b => b.onclick = () => { reqOpen = reqOpen === b.dataset.req ? null : b.dataset.req; renderRequests(); });
+}
+
+const detailCache = {};
+async function loadDetail(dir) {
+  const el = $('detail'); if (!el) return;
+  try {
+    if (!detailCache[dir]) { const r = await fetch('/api/run/detail?dir=' + encodeURIComponent(dir)); if (!r.ok) throw new Error('HTTP ' + r.status); detailCache[dir] = await r.json(); }
+    const d = detailCache[dir];
+    if (tab === 'steps') {
+      el.innerHTML = stepsHTML((d.steps && d.steps.steps) || []);
+    } else if (tab === 'shots') {
+      const lp = (d.steps && d.steps.browser) === 'lightpanda';
+      el.innerHTML = ((d.screenshots || []).length ? `${lp ? '<div class="sub" style="padding:0 0 8px">가벼운 브라우저는 화면을 그리지 않아 이 캡처는 텍스트 렌더링입니다. 실제 화면은 Chromium 실행의 캡처를 보세요.</div>' : ''}<div class="shots">${d.screenshots.map(s => `<figure><a href="/evidence/${esc(s)}" target="_blank" rel="noopener"><img src="/evidence/${esc(s)}" alt="검증 당시 화면" loading="lazy"></a><figcaption>${esc(s.split('/').pop())}</figcaption></figure>`).join('')}</div>` : '<div class="empty"><b>화면 캡처가 없습니다</b>이 실행은 캡처를 지원하지 않는 브라우저에서 돌았거나 이전 버전에서 기록되었습니다.</div>');
+    } else if (tab === 'net') {
+      const rows = d.network || [];
+      el.innerHTML = `<div class="sub" style="padding:4px 0 8px">전체 요청 ${d.network_total || 0}건 중 문서·API·오류 ${rows.length}건 (정상 정적 파일은 생략)</div>` + (rows.length ? `<table class="net"><thead><tr><th class="fit">방식</th><th class="num">상태</th><th>주소</th></tr></thead><tbody>${rows.map(n => `<tr><td class="fit">${esc(n.method)}</td><td class="num">${n.failed ? st({ x: ['실패', 'bad'] }, 'x') : (n.status >= 400 ? st({ x: [String(n.status), 'bad'] }, 'x') : n.status || '-')}</td><td class="url">${esc(n.url)}${n.error ? ` <span class="sub">${esc(n.error)}</span>` : ''}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">기록된 요청이 없습니다.</div>');
+    } else {
+      const rows = d.console || [];
+      el.innerHTML = rows.length ? `<table><thead><tr><th class="fit">수준</th><th>메시지</th></tr></thead><tbody>${rows.map(c => `<tr><td class="fit">${st({ error: ['오류', 'bad'], exception: ['예외', 'bad'], warn: ['경고', 'warn'], warning: ['경고', 'warn'], log: ['로그', 'muted'] }, c.level)}</td><td class="mono console-text">${esc(c.text)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty"><b>브라우저 콘솔 오류가 없습니다</b></div>';
+    }
+  } catch (e) { el.innerHTML = `<div class="errbox"><span>증거를 불러오지 못했습니다 (${esc(e.message)})</span><button class="btn" id="detailRetry">다시 시도</button></div>`; $('detailRetry').onclick = () => { delete detailCache[dir]; render(); }; }
+}
+
+function toMarkdown() {
+  const o = data, checks = o.checks || [], dep = (o.deployments || []).find(d => d.marker === marker);
+  const L = [];
+  L.push(`# QA 검증 결과: ${o.target}`);
+  L.push(`- 배포 표시: \`${marker}\`${dep ? ` (처음 확인 ${dep.first_seen}, 마지막 검증 ${dep.last_seen})` : ''}`);
+  const v = checks.filter(c => !c.not_verified), p = v.filter(c => c.outcome === 'PASS' || c.outcome === 'QA_FLAKE');
+  L.push(`- 결과: ${p.length}/${v.length} 정상, 미실행 ${checks.length - v.length}, 미해결 문제 ${(o.incidents || []).length}건, 데이터 발견 사항 ${o.open_findings || 0}건`);
+  L.push(`- 생성: ${new Date().toLocaleString('ko-KR')}`, '');
+  L.push('| 검사 항목 | 결과 | 검증 시각 | 증거 |', '|---|---|---|---|');
+  for (const c of checks) {
+    const res = c.not_verified ? '미실행' : (OUTCOME[c.outcome] || [c.outcome])[0];
+    const ev = c.not_verified ? '' : [c.screenshot ? (c.browser === 'lightpanda' ? '화면(텍스트 렌더링)' : '화면') : '', c.steps ? `단계 ${c.steps}` : '', c.requests ? `응답 ${c.requests}` : ''].filter(Boolean).join(', ');
+    L.push(`| ${c.title || c.scenario_id} | ${res}${c.cause ? ` (${c.cause.headline.replace(/\|/g, '/')})` : ''} | ${c.finished_at || ''} | ${ev} |`);
+  }
+  return L.join('\n');
+}
+async function copyMarkdown() {
+  try { await navigator.clipboard.writeText(toMarkdown()); toast('Markdown을 복사했습니다. Jira나 문서에 붙여넣으세요.'); }
+  catch { toast('복사에 실패했습니다. 리포트 페이지에서 내용을 선택해 복사하세요.'); }
+}
+
+poll.start();
+reqPoll.start();
+</script>
+</body>
+</html>

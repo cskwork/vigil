@@ -53,6 +53,7 @@ func TestWriteIncident(t *testing.T) {
 		Browser: model.BrowserLightpanda, Outcome: model.OutcomeAppFailure, Attempt: 2,
 		StartedAt: time.Now().Add(-time.Minute), FinishedAt: time.Now(), DurationMs: 1234,
 		FailedStep: 4, FailedAction: "assert_text", Expected: "초등", Actual: "(not found)", Error: "assert_text: 초등 not in body", EvidenceDir: runDir,
+		Environment: "prod",
 	}
 	in := IncidentInput{
 		Incident: &model.Incident{Kind: model.IncidentAppRegression, Title: "Landing tabs missing"},
@@ -71,7 +72,7 @@ func TestWriteIncident(t *testing.T) {
 	}
 	body, _ := os.ReadFile(md)
 	for _, want := range []string{
-		"# Landing tabs missing", "| shipped sha | 6f22ff7a1dcc |", "| scenario | home-landing v3 |", "| attempt | 2 |",
+		"# Landing tabs missing", "| shipped sha | 6f22ff7a1dcc |", "| environment | prod |", "| scenario | home-landing v3 |", "| attempt | 2 |",
 		"| expected | 초등 |", "| actual | (not found) |", "TypeError: x is undefined", "POST https://x/api/auth → 502", "ERR_NAME_NOT_RESOLVED",
 		"dom: `" + filepath.Join(runDir, "dom.html"), "```yaml\nscenario:\n  id: home-landing", "`src/components/entry/training.vue`",
 	} {
@@ -87,7 +88,7 @@ func TestWriteIncident(t *testing.T) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if doc.ShippedSHA != "6f22ff7a1dcc" || doc.ScenarioVersion != 3 || doc.FailedStep != 4 || len(doc.ConsoleErrors) != 1 || len(doc.FailedRequests) != 2 || doc.ScenarioYAML == "" {
+	if doc.Environment != "prod" || doc.ShippedSHA != "6f22ff7a1dcc" || doc.ScenarioVersion != 3 || doc.FailedStep != 4 || len(doc.ConsoleErrors) != 1 || len(doc.FailedRequests) != 2 || doc.ScenarioYAML == "" {
 		t.Fatalf("json doc: %+v", doc)
 	}
 	if _, _, err := s.WriteIncident(context.Background(), IncidentInput{}); err == nil {
@@ -121,5 +122,49 @@ func TestPruneRetention(t *testing.T) {
 	}
 	if exists(oldAgent) || !exists(freshAgent) {
 		t.Error("agent retention")
+	}
+}
+
+// J-3: the incident files lead with the same one-sentence cause the dashboard
+// shows, and keep the technical block untouched below it.
+func TestIncidentLeadsWithCauseSentence(t *testing.T) {
+	s := New(t.TempDir())
+	runDir, _ := s.RunDir("entry-deeplink", time.Now(), 1)
+	run := &model.Run{
+		ProjectID: "demo", ScenarioID: "entry-deeplink", ScenarioVersion: 2, Browser: model.BrowserChromium,
+		Outcome: model.OutcomeAppFailure, Attempt: 1, StartedAt: time.Now(), FinishedAt: time.Now(),
+		FailedStep: 5, FailedAction: "assert_visible", Expected: "element present", Actual: "0 matches",
+		Error:       `step 5 (assert_visible): locate by=role role=listitem name="영어 1반 교사A": 0 matches`,
+		EvidenceDir: runDir,
+	}
+	md, js, err := s.WriteIncident(context.Background(), IncidentInput{
+		Incident: &model.Incident{Kind: model.IncidentAppRegression, Title: "APP_REGRESSION: 교사 입장 딥링크"},
+		Run:      run,
+		Scenario: &model.Scenario{ID: "entry-deeplink", Title: "교사 입장 딥링크"},
+		Version:  &model.ScenarioVersion{Version: 2, YAML: "scenario:\n  id: entry-deeplink\n"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `원인: 5단계에서 확인하려던 "영어 1반 교사A" 항목이 화면에 없습니다.`
+	body, _ := os.ReadFile(md)
+	if !strings.Contains(string(body), want) {
+		t.Errorf("markdown missing %q\n%s", want, body)
+	}
+	// first line under the title, before the technical block
+	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if lines[0] != "# APP_REGRESSION: 교사 입장 딥링크" || lines[2] != want {
+		t.Errorf("cause is not the first line under the title:\n%s", strings.Join(lines[:4], "\n"))
+	}
+	if !strings.Contains(string(body), "| expected | element present |") || !strings.Contains(string(body), "locate by=role") {
+		t.Errorf("technical block lost:\n%s", body)
+	}
+	raw, _ := os.ReadFile(js)
+	var doc IncidentDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Cause != strings.TrimPrefix(want, "원인: ") {
+		t.Errorf("json cause = %q", doc.Cause)
 	}
 }

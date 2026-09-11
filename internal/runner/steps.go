@@ -78,6 +78,8 @@ func (s *session) exec(ctx context.Context, st dsl.Step, sr *StepResult, ref str
 		return s.doRequest(ctx, st.AssertRequest, sr)
 	case "assert_attr":
 		return s.doAttr(ctx, st.AssertAttr, sr, ref)
+	case "assert_data":
+		return s.doAssertData(ctx, st.AssertData, sr, ref)
 	case "expect_popup":
 		return s.doPopup(ctx, st.ExpectPopup, sr)
 	case "eval":
@@ -165,7 +167,7 @@ func (s *session) resolve(ctx context.Context, l *dsl.Locator, ref string, requi
 		case last.Error != "":
 			observed = last.Error
 		case last.Count == 0:
-			observed = "0 matches"
+			observed = "0 matches" + candidatesText(last)
 		case !last.Visible:
 			observed = fmt.Sprintf("%d match(es), nth element <%s> not visible", last.Count, last.Tag)
 		default:
@@ -207,6 +209,9 @@ func (s *session) doGoto(ctx context.Context, ref string, sr *StepResult) *stepE
 		return fail(FailInternal, "goto: %v", err)
 	}
 	sr.Expected = u
+	if e := s.checkAllowlist(u); e != nil {
+		return e
+	}
 	if err := chromedp.Run(ctx, chromedp.Navigate(u)); err != nil {
 		return s.classifyCDPErr(err, FailNavigation, "goto "+u)
 	}
@@ -499,7 +504,63 @@ func (s *session) doURL(ctx context.Context, a *dsl.URLAssert, sr *StepResult, c
 	if s.runCtx.Err() != nil {
 		return fail(FailTimeout, "%s: run timeout exceeded (url=%s)", what, last).with(sr.Expected, last)
 	}
+	// The URL may have arrived in another tab: window.open leaves the original target where
+	// it was, so "current url X" on its own reads as if the app never navigated at all.
+	if hint := s.urlOpenInAnotherTab(a); hint != "" {
+		s.note("%s: %s", what, hint)
+		return fail(class, "%s: %s; current url %s (%s)", what, sr.Expected, last, hint).with(sr.Expected, last+" ("+hint+")")
+	}
 	return fail(class, "%s: %s; current url %s", what, sr.Expected, last).with(sr.Expected, last)
+}
+
+// urlOpenInAnotherTab reports whether the URL this step waited for is already open in a
+// different page target of this run. A script that waits on the original target can never
+// pass in that case: it needs an expect_popup step before this one.
+func (s *session) urlOpenInAnotherTab(a *dsl.URLAssert) string {
+	if a.Contains == "" || s.pageCtx == nil {
+		return ""
+	}
+	// Once expect_popup has adopted a popup, the page the run started on is still open and
+	// would always answer this question "yes". Telling a script that already switched tabs
+	// to add expect_popup sends the repair in the wrong direction, so say nothing.
+	if s.pageCtx != s.mainCtx {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(s.pageCtx, 3*time.Second)
+	defer cancel()
+	current := ""
+	if c := chromedp.FromContext(s.pageCtx); c != nil && c.Target != nil {
+		current = string(c.Target.TargetID)
+	}
+	own := s.browserContextID(ctx, current)
+	infos, err := chromedp.Targets(ctx)
+	if err != nil {
+		return ""
+	}
+	other := ""
+	for _, info := range infos {
+		if info.Type != "page" || string(info.TargetID) == current {
+			continue
+		}
+		if own != "" && info.BrowserContextID != own {
+			continue
+		}
+		if info.URL == "" || info.URL == "about:blank" {
+			continue
+		}
+		if strings.Contains(info.URL, a.Contains) {
+			return "the url is open in another tab (" + truncate(info.URL, 120) + "); this script needs expect_popup before this step"
+		}
+		if other == "" {
+			other = info.URL
+		}
+	}
+	if other != "" {
+		// The waited-for url is often a redirect the popup has already left, so an exact
+		// match is not required to know the script is watching the wrong target.
+		return "this run has a second tab open (" + truncate(other, 120) + ") while this step watches the first; window.open flows need expect_popup before this step"
+	}
+	return ""
 }
 
 // doText asserts presence (want=true) or absence of text in body or `in` locator.

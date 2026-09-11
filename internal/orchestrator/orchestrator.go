@@ -68,6 +68,10 @@ type Decision struct {
 	Action      model.Action
 	Reason      string
 	ScenarioIDs []string // impacted scripts to run first / to repair
+	// Defer marks a NO_ACTION that is only circumstantial (no agent in this
+	// process, agent budget spent, read-only default env): the feature must stay
+	// unhandled so the next scan/loop plans it again.
+	Defer bool
 }
 
 // State keys (scheduler_state) written by the orchestrator.
@@ -75,7 +79,11 @@ const (
 	stateImpactPrefix = "impact:" // impact:<feature>:<sha> → impactState JSON
 	stateFlakePrefix  = "flakes:" // flakes:<scenario> → consecutive flake count
 	stateGatePrefix   = "gate:"   // gate:<scenario> → last candidate/repair gate outcome JSON
-	stateReviewPrefix = "review:" // review:<feature>:<sha> → agent findings needing a human
+	// agentdir:<job id> → the evidence directory that job's agent run wrote to.
+	// Callers that execute a job inline read its gate.json from there instead of
+	// guessing which directory belongs to which run.
+	stateAgentDirPrefix = "agentdir:"
+	stateReviewPrefix   = "review:" // review:<feature>:<sha> → agent findings needing a human
 )
 
 // jobPayload is the kind-specific JSON carried by jobs the orchestrator creates.
@@ -90,6 +98,16 @@ type jobPayload struct {
 	ConfirmRunID int64          `json:"confirm_run_id,omitempty"`
 	EntryPath    string         `json:"entry_path,omitempty"`
 	Trigger      string         `json:"trigger,omitempty"`
+	// Operator marks work a person started at a terminal (`vigil reproduce`).
+	// It survives the one-shot priority bypass being consumed on claim, so the
+	// follow-up repair still knows where it came from.
+	Operator bool `json:"operator,omitempty"`
+	// ValidationError carries the DSL validation failure of the current script
+	// version into an AGENT_REPAIR job: there is no run to read a failure from.
+	ValidationError string `json:"validation_error,omitempty"`
+	// Env is the target environment. The orchestrator always sets the default
+	// environment: agent, impacted and validation work never targets another one.
+	Env string `json:"env,omitempty"`
 }
 
 func (p jobPayload) String() string {
@@ -110,6 +128,20 @@ func (o *Orchestrator) PlanFeature(ctx context.Context, f *model.Feature) (*Deci
 	if f == nil {
 		return nil, errors.New("orchestrator: nil feature")
 	}
+	if !model.IsShipKind(f.Kind) {
+		// A queue item (issue / log signature) is not a deployment: nothing to
+		// re-run; the agent reproduces the symptom and a human approves the script.
+		if o.agent == nil {
+			return &Decision{Action: model.ActionNone, Defer: true, Reason: fmt.Sprintf("%s %s needs the Browser Agent to reproduce it (rule 12: deterministic QA continues)", f.Kind, f.Ref)}, nil
+		}
+		if env := o.cfg.DefaultEnv(); env.ReadOnly {
+			return &Decision{Action: model.ActionNone, Defer: true, Reason: fmt.Sprintf("default environment %s is read-only; reproduce jobs never start there", env.Name)}, nil
+		}
+		if ok, reason := o.agentBudgetOK(ctx); !ok {
+			return &Decision{Action: model.ActionNone, Defer: true, Reason: reason}, nil
+		}
+		return &Decision{Action: model.ActionReproduce, Reason: fmt.Sprintf("%s %s: reproduce the reported symptom, then wait for approval", f.Kind, f.Ref)}, nil
+	}
 	ids, err := o.ImpactedScenarios(ctx, f)
 	if err != nil {
 		return nil, err
@@ -122,10 +154,10 @@ func (o *Orchestrator) PlanFeature(ctx context.Context, f *model.Feature) (*Deci
 		}, nil
 	}
 	if o.agent == nil {
-		return &Decision{Action: model.ActionNone, Reason: "no trustworthy coverage and Browser Agent unavailable (rule 12: deterministic QA continues)"}, nil
+		return &Decision{Action: model.ActionNone, Defer: true, Reason: "no trustworthy coverage and Browser Agent unavailable (rule 12: deterministic QA continues)"}, nil
 	}
 	if ok, reason := o.agentBudgetOK(ctx); !ok {
-		return &Decision{Action: model.ActionNone, Reason: reason}, nil
+		return &Decision{Action: model.ActionNone, Defer: true, Reason: reason}, nil
 	}
 	return &Decision{Action: model.ActionBrowserAgentDiscover, Reason: "new feature with no trustworthy coverage"}, nil
 }
@@ -224,7 +256,7 @@ func (o *Orchestrator) EnqueueForFeature(ctx context.Context, f *model.Feature, 
 				Priority:   model.PriorityImpacted,
 				ScenarioID: id,
 				FeatureID:  f.ID,
-				Payload:    jobPayload{FeatureID: f.ID, ShippedSHA: sha, Impacted: true}.String(),
+				Payload:    jobPayload{FeatureID: f.ID, ShippedSHA: sha, Impacted: true, Env: o.cfg.DefaultEnv().Name}.String(),
 			}
 			jid, _, err := o.st.EnqueueJob(ctx, j, "impacted:"+id+":"+f.ID+":"+sha)
 			if err != nil {
@@ -240,10 +272,18 @@ func (o *Orchestrator) EnqueueForFeature(ctx context.Context, f *model.Feature, 
 		if d.Action == model.ActionBrowserAgentVerifyChange {
 			kind = model.JobAgentVerify
 		}
-		if _, _, err := o.enqueueAgentJob(ctx, kind, f.ID, sha, jobPayload{FeatureID: f.ID, ShippedSHA: sha, Trigger: string(d.Action)}); err != nil {
+		if _, _, err := o.enqueueAgentJob(ctx, kind, f.ID, sha, jobPayload{FeatureID: f.ID, ShippedSHA: sha, Trigger: string(d.Action), Env: o.cfg.DefaultEnv().Name}); err != nil {
+			return err
+		}
+	case model.ActionReproduce:
+		if _, _, err := o.enqueueAgentJob(ctx, model.JobAgentReproduce, f.ID, sha, jobPayload{FeatureID: f.ID, ShippedSHA: sha, Trigger: string(d.Action), Env: o.cfg.DefaultEnv().Name}); err != nil {
 			return err
 		}
 	case model.ActionNone:
+		if d.Defer {
+			o.logger.Printf("feature %s@%s: deferred, stays unhandled (%s)", f.ID, short(sha), d.Reason)
+			return nil
+		}
 		o.logger.Printf("feature %s@%s: no action (%s)", f.ID, short(sha), d.Reason)
 	default:
 		return fmt.Errorf("orchestrator: unsupported feature action %s", d.Action)
@@ -252,10 +292,17 @@ func (o *Orchestrator) EnqueueForFeature(ctx context.Context, f *model.Feature, 
 }
 
 func (o *Orchestrator) enqueueAgentJob(ctx context.Context, kind model.JobKind, featureID, sha string, p jobPayload) (int64, bool, error) {
+	return o.enqueueAgentJobAt(ctx, kind, featureID, sha, p, model.PriorityNewDirectCoverage)
+}
+
+// enqueueAgentJobAt is enqueueAgentJob with an explicit priority: operator-initiated
+// work uses PriorityUserRequest, which is also the hourly-agent-budget bypass.
+func (o *Orchestrator) enqueueAgentJobAt(ctx context.Context, kind model.JobKind, featureID, sha string, p jobPayload, priority int) (int64, bool, error) {
+	p.Env = o.cfg.DefaultEnv().Name // agent jobs always run on the default environment (never a read-only one)
 	j := &model.Job{
 		ProjectID: o.cfg.Project.ID,
 		Kind:      kind,
-		Priority:  model.PriorityNewDirectCoverage,
+		Priority:  priority,
 		FeatureID: featureID,
 		Payload:   p.String(),
 	}
@@ -278,6 +325,15 @@ func (o *Orchestrator) getJSONState(ctx context.Context, key string, v any) (boo
 		return false, err
 	}
 	return true, json.Unmarshal([]byte(s), v)
+}
+
+// nextDue is when a scenario runs again: approved daily scripts wait for the
+// next schedule.daily_at slot, everything else follows the state/class cadence.
+func (o *Orchestrator) nextDue(sc *model.Scenario) time.Time {
+	if sc.Cadence == config.DailyCadence {
+		return o.cfg.NextDailyRun(o.now())
+	}
+	return o.now().Add(o.cadence(sc))
 }
 
 // cadence returns the scheduling interval for a scenario by state/class (PRD §12).

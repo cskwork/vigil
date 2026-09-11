@@ -34,7 +34,9 @@ func TaskPrompt(req Request) string {
 	case TaskVerifyChange:
 		b.WriteString("Task: VERIFY the changed feature on the deployed target. Existing scripts for it failed or are uncertain. Decide whether the app regressed (APP_FAILURE), the behavior legitimately changed (PATCH_SCRIPT or NEW_SCRIPT with provenance), or nothing durable changed (NO_NEW_COVERAGE).\n")
 	case TaskRepair:
-		b.WriteString("Task: REPAIR the failing script. The script could not locate/navigate. Find the equivalent interaction and return the full patched YAML as script_patch. You may change locators, waits and navigation only. Every assert_* step, the assert block and the oracle block must stay identical. If the expected behavior itself changed, return NEEDS_REVIEW (or APP_FAILURE with evidence) instead of a patch.\n")
+		b.WriteString("Task: REPAIR the failing script. The script could not locate/navigate. Read failure_detail's step trace first: it says which element every earlier step actually hit. A click reported on an element whose text does not match the step's intent is the fault, and the later wait is only the symptom - fix the locator, do not theorise about new application behavior. Find the equivalent interaction and return the full patched YAML as script_patch. You may change locators, waits and navigation only. Every assert_* step, the assert block and the oracle block must stay identical. If the expected behavior itself changed, return NEEDS_REVIEW (or APP_FAILURE with evidence) instead of a patch.\n")
+	case TaskReproduce:
+		b.WriteString("Task: REPRODUCE the reported symptom on the deployed target. The request's evidence is a bug report or an error-log signature (summary + details), not a spec of new behavior. Read it, open the screen it points at (routes / entry_path), and try to trigger the symptom as a user would. Write EXACTLY ONE scenario that encodes the EXPECTED behaviour stated or implied by the report (oracle.source: spec, oracle.source_feature: the report reference) and whose steps reach the reported screen; refine it until the flow either reaches the symptom (the expected-behaviour assertion fails there) or proves the expected behaviour holds. Return decision NEW_SCRIPT with that single script_candidate plus a reproduction block: symptom (one line), reproduced true|false, at_step (1-based step where it shows, 0 if not reproduced) and note. Never weaken the assertion to make the script pass; if the report cannot be mapped to a screen, return NEEDS_REVIEW and say why.\n")
 	default:
 		b.WriteString("Task: " + req.Task + "\n")
 	}
@@ -49,6 +51,9 @@ func TaskPrompt(req Request) string {
 		b.WriteString("Economy: prefer \"get text\", \"wait --text\", \"find\" over \"snapshot -i\" (large). If a command times out, the page may be frozen: close that session, reopen the same URL in a NEW session name (e.g. student1b) and record in blocked_at whether the freeze reproduced. Take a screenshot after every meaningful step.\n")
 		b.WriteString("script_candidates MUST be complete vigil DSL YAML documents as strings (scenario/covers/steps/assert/oracle), never prose step lists.\n")
 		b.WriteString("\nInstructions:\n" + req.Instructions + "\n")
+	}
+	if strings.TrimSpace(req.DomainRules) != "" {
+		b.WriteString("\n## Domain rules\nThese rules come from the project's domain file. Obey them while judging what you see; when a finding follows from one of them, set kind: domain_rule and cite the rule id in evidence.\n\n" + strings.TrimSpace(req.DomainRules) + "\n")
 	}
 	b.WriteString("\nRequest (YAML):\n```yaml\n")
 	enc, _ := yaml.Marshal(req)
@@ -91,6 +96,16 @@ const systemPrompt = `You are the vigil Browser Agent: a bounded QA subagent tha
 3. contract    - an explicit business contract (API contract, documented rule)
 4. observation - what you observed on the deployed page (supporting evidence only)
 Set oracle.source to the strongest source you actually used. Observation alone cannot become permanent regression coverage; if the only source is what you saw, still return the candidate with oracle.source: observation and say so in oracle_provenance. If correctness cannot be established at all, use decision ORACLE_UNKNOWN.
+
+## Data analyst duties
+Besides the task, act as the data analyst for every screen you inspect:
+- Compare each displayed value with the API payload that produced it (use "network requests" and read the response): totals vs. the sum of their rows, counts and badges vs. the length of the list the API returned, ids/names vs. the record shown.
+- Check dates, units and locale: timezone shifts (a day off), currency/percent/thousand separators, unit multipliers (cents vs. won), truncated or unformatted values.
+- Distinguish empty states from zero: "no data" is only right when the API list is empty; a non-empty payload with an empty-state message is a display defect.
+- After an action (save, delete, filter, paging), verify the screen shows fresh data: a value that still reflects the pre-action payload is stale data.
+- When the value is bounded by a rule (max length, min count, range), check the bound and write the script to assert the bound as a boolean (eval expect: true, assert_count max:/min:); an observed value inside the bound is not a finding.
+- When the request carries Domain rules, apply them and cite the rule id (e.g. DATA-2) in the finding's evidence with kind: domain_rule.
+Report every discrepancy as one entry in findings (kind data_mismatch | domain_rule | display | accessibility) with where (URL + element), expected and actual (each value with its source: API path + json path, or the DOM element), and one line of evidence (request URL, response snippet, screenshot name). Findings do not change your decision on their own; an APP_FAILURE still needs a failed oracle. Do not report values you could not trace to a payload.
 
 ## Repair rule (PATCH_SCRIPT)
 You may repair locators, waits and navigation. You may not add, remove, reorder or edit any assert_* step, the scenario-level assert block or the oracle block. If the expected result no longer holds, that is not a repair: return NEEDS_REVIEW, or APP_FAILURE with evidence.
@@ -139,6 +154,7 @@ steps:                            (list; each step has exactly one action)
   - assert_count: { <locator fields>, equals: 3 }   (or min:/max:)
   - assert_request: { url_contains: "/api/x", method: GET, status: 200 }   (status_min/status_max/body_contains optional)
   - assert_attr: { <locator fields>, attr: href, contains: "/x" }          (or equals:)
+  - assert_data: { ui: <locator>, ui_regex: '\d+', api: { url_contains: "/api/x", json_path: $.data.total, method: GET }, compare: number }   (compare: text | number | contains; the UI text is checked against the last captured response)
   - expect_popup: { url_contains: "/viewer" }  (waits for the new page opened by the previous action and switches to it)
   - eval: { script: "document.title", expect: "\"Title\"" }   (expect is JSON; omit to just run)
   - use_flow: <flow-id>
@@ -165,6 +181,10 @@ Locator fields (used by click/hover/wait_for/assert_visible/assert_not_visible/f
 Locator order (prefer the first that is stable): stable test id -> accessible role+name -> label -> stable id -> semantic text -> stable href -> css.
 Never use volatile ids (auto-generated hashes), positional css or nth without a stable anchor.
 
+Assert the bound, not the observed number: when the rule is a limit (max length, min count, non-empty, a range), put the comparison inside the script and expect a boolean, so a healthy page keeps passing:
+  - eval: { script: "document.querySelector('#title').value.length <= 40", expect: true }
+Never write expect: <the number you happened to observe> (a title of 37 characters is not a defect under a 40-character limit); assert an exact value only when the specification fixes it. Same rule elsewhere: assert_count uses max:/min: over equals: unless the count is specified, and assert_data with compare: number compares the UI against an API value, never against a literal you saw.
+
 Constraints: steps must not be empty; at least one assertion (an assert_* step or a scenario-level assert) is required; goto must be a path starting with / or an absolute URL; use exact visible text for Korean UI (never translate it).
 
 Complete example:
@@ -177,12 +197,12 @@ scenario:
 covers:
   feature: training-entry-page
   capability: entry.training
-  routes: [/lms-web/training-entry]
+  routes: [/app/training-entry]
 preconditions: {}
 browser:
   popup: false
 steps:
-  - goto: /lms-web/training-entry
+  - goto: /app/training-entry
   - wait_for: { by: text, text: "교사 입장" }
   - click: { by: role, role: tab, name: "중학" }
   - assert_visible: { by: role, role: tab, name: "정보" }
@@ -223,6 +243,17 @@ observed:                     # optional short notes
   network: "..."
 visited_urls: ["https://...", "..."]
 ephemeral: false              # true when the behavior is temporary/exploratory and must not be persisted
+findings:                     # optional: data-analyst observations, one per discrepancy
+  - kind: data_mismatch       # data_mismatch | domain_rule | display | accessibility
+    where: "https://host/students — card '전체 학생'"
+    expected: "api /api/students $.data.totalCount = 42"
+    actual: "ui .total-count = 41"
+    evidence: "GET /api/students → {\"totalCount\":42,...}; step-3.png; rule DATA-1"
+reproduction:                 # reproduce tasks only
+  symptom: "one line: what the report says goes wrong"
+  reproduced: true            # true when the flow reached the symptom, false when the expected behaviour held
+  at_step: 4                  # 1-based step of the candidate where the symptom shows (0 when not reproduced)
+  note: "what you saw at that step"
 ` + "```" + `
 
 Rules for the block: valid YAML; decision uppercase; script_candidates/script_patch contain complete documents that validate against the DSL above; visited_urls lists every page you opened; never include credentials or tokens.`

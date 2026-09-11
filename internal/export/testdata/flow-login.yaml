@@ -1,0 +1,10 @@
+flow:
+  id: login-as-student
+  version: 2
+steps:
+  - name: 로그인 페이지
+    goto: /login
+  - fill: { by: label, name: "아이디", input: "student01" }
+  - fill: { by: label, name: "비밀번호", input: "pw" }
+  - click: { by: role, role: button, name: "로그인" }
+  - assert_request: { url_contains: "/api/login", status: 200 }

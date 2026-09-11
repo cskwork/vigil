@@ -40,6 +40,14 @@ func (o *Orchestrator) AfterRun(ctx context.Context, job *model.Job, run *model.
 	if at.IsZero() {
 		at = o.now()
 	}
+	if sc.State == model.StatePendingApproval {
+		// A manual run of a script awaiting a human decision: keep the run and
+		// its metrics, but no promotion, quarantine, repair job or incident.
+		if _, err := o.st.RecordScenarioOutcome(ctx, o.cfg.Project.ID, sc.ID, run.Outcome, at); err != nil {
+			return err
+		}
+		return o.trackImpact(ctx, job, run)
+	}
 	sc, err = o.st.RecordScenarioOutcome(ctx, o.cfg.Project.ID, sc.ID, run.Outcome, at)
 	if err != nil {
 		return err
@@ -69,7 +77,7 @@ func (o *Orchestrator) react(ctx context.Context, job *model.Job, run *model.Run
 		if run.Outcome.IsInfrastructure() {
 			return o.afterInfra(ctx, sc, run)
 		}
-		return o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, sc.ID, o.now().Add(o.cadence(sc)))
+		return o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, sc.ID, o.nextDue(sc))
 	}
 }
 
@@ -83,7 +91,7 @@ func (o *Orchestrator) afterPass(ctx context.Context, sc *model.Scenario) error 
 		o.logger.Printf("scenario %s: SOAK %d/%d → ACTIVE", sc.ID, sc.SoakPasses, sc.SoakTarget)
 		sc.State = model.StateActive
 	}
-	if err := o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, sc.ID, o.now().Add(o.cadence(sc))); err != nil {
+	if err := o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, sc.ID, o.nextDue(sc)); err != nil {
 		return err
 	}
 	return o.st.ResolveIncidents(ctx, o.cfg.Project.ID, model.IncidentAppRegression, sc.ID)
@@ -105,7 +113,7 @@ func (o *Orchestrator) afterFlake(ctx context.Context, sc *model.Scenario) error
 			return err
 		}
 	}
-	return o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, sc.ID, o.now().Add(o.cadence(sc)))
+	return o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, sc.ID, o.nextDue(sc))
 }
 
 // afterDrift: bounded agent repair, backoff.

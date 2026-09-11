@@ -96,8 +96,8 @@ func TestParsePlanRepairsUnquotedProse(t *testing.T) {
 			t.Errorf("reason lost for %q", a.Target)
 		}
 	}
-	// "target: /lms-web/training-entry (student entry path)" must become a path.
-	if got := p.Actions[2].Target; got != "/lms-web/training-entry" {
+	// "target: /app/training-entry (student entry path)" must become a path.
+	if got := p.Actions[2].Target; got != "/app/training-entry" {
 		t.Errorf("target = %q, want the path without the parenthetical", got)
 	}
 }
@@ -138,7 +138,7 @@ func TestParsePlanRepairsEveryCapturedAnswer(t *testing.T) {
 
 func TestSanitizeTarget(t *testing.T) {
 	for in, want := range map[string]string{
-		"/lms-web/training-entry (student entry path)": "/lms-web/training-entry",
+		"/app/training-entry (student entry path)": "/app/training-entry",
 		"  /reports  ": "/reports",
 		"app.routing":  "app.routing",
 		"/entry,":      "/entry",

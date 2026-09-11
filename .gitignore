@@ -1,5 +1,6 @@
-# built binary (root only; cmd/vigil/ is source)
+# built binaries (root only; cmd/vigil/ is source)
 /vigil
+/vigil-*
 # local state, evidence, downloaded browsers
 .vigil/
 /evidence/
@@ -13,8 +14,19 @@ vigil.local.yaml
 .DS_Store
 .playwright-cli/
 # domain-specific, local only (ship *.example.* and examples/ instead)
-# *.hml: Korean HWPML source documents used as local test material; never shippable
+# Local working documents and data exports. Releases publish main's tree verbatim with
+# no filter, so anything dropped in the working copy ships unless it is named here.
+# The .hml files were the first case; student result exports were the second.
 *.hml
+*.hwp
+*.hwpx
+*.xlsx
+*.xls
+*.csv
+*.docx
+*.doc
+*.pptx
+*.ppt
 /vigil.yaml
 /url.md
 /scenarios/
@@ -26,3 +38,7 @@ vigil.local.yaml
 # pull the old domain config into a release tree
 /qa-flow
 /qa-flow.yaml
+
+# domain packs are local (ship examples/ instead)
+/packs/
+/tasks/hitl-qa/loki-sample.json

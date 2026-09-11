@@ -30,6 +30,9 @@ type Provider interface {
 	Healthy(ctx context.Context) bool
 	// Stop terminates a browser this provider launched (no-op for attached ones).
 	Stop() error
+	// Running reports whether this provider currently owns a launched process,
+	// i.e. whether Stop would actually free anything.
+	Running() bool
 }
 
 // NewLightpanda returns a provider that attaches to a running Lightpanda CDP

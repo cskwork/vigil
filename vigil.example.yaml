@@ -13,6 +13,22 @@ target:
   url_file: url.md                 # first URL = primary target; its host is allowlisted automatically
   base_url: https://dev.example.com
   allowed_hosts: [dev.example.com]
+  # Named environments. Leave the block out and one implicit environment
+  # "default" is synthesised from base_url / allowed_hosts (old behaviour).
+  # `run --env <name>` picks one; cadence, soak, impacted and agent work always
+  # use default_env. A read_only environment refuses every scenario whose
+  # mutation is not read-only (CLI exit 2, dashboard 400, job FAILED).
+  # default_env: dev
+  # environments:
+  #   dev:
+  #     base_url: https://dev.example.com
+  #     allowed_hosts: [dev.example.com]
+  #     asset_page: https://dev.example.com/app     # optional; not read by the gate yet
+  #     read_only: false
+  #   prod:
+  #     base_url: https://www.example.com
+  #     allowed_hosts: [example.com]
+  #     read_only: true
 
 discovery:
   adapter: generic-git             # generic-git | sdlc-kit | file
@@ -27,6 +43,33 @@ discovery:
     - { path_prefix: src/, route: /, capability: app }
   poll_interval: 120s
   history_limit: 3
+  # Poll several sources together. When `adapters` is set it replaces `adapter`.
+  # Jira issues and log signatures are not deployments: their features are READY
+  # at once and the agent is asked to reproduce them (approval required).
+  # adapters: [generic-git, jira, loki, exec]
+  # jira:
+  #   cli: acli                    # `<cli> jira workitem search --jql ... --json --limit N --fields ...`
+  #   jql: 'project = A20 AND statusCategory != Done AND updated >= -2d'
+  #   limit: 20
+  #   poll_interval: 10m
+  #   route_hints:                 # case-insensitive substring of summary+description → entry route
+  #     - { match: "checkout", route: "/checkout" }
+  # loki:
+  #   base_url: ${GRAFANA_BASE_URL}          # root or full /api/ds/query URL (export the var before starting)
+  #   datasource_uid: ${GRAFANA_DATASOURCE_UID}
+  #   email_env: GRAFANA_EMAIL               # names of the env vars, never the secrets themselves
+  #   password_env: GRAFANA_PASSWORD
+  #   expr: '{file=~"api|web"} |= "ERROR"'
+  #   window: 1h
+  #   poll_interval: 15m
+  #   min_count: 3                 # a signature needs this many lines in the window
+  #   max_lines: 500
+  #   max_events_per_poll: 5       # keep the top-N signatures by line count
+  #   signature: '(?i)(exception|error)[^\n]{0,120}'
+  # exec:
+  #   command: ["python3", "scripts/db-events.py"]   # prints a JSON array (see examples/exec-events.example.json)
+  #   poll_interval: 15m
+  #   timeout: 60s
 
 deployment:
   readiness:
@@ -40,6 +83,7 @@ browser:
   chromium: { binary: "", headless: true }   # empty = auto-detect
   step_timeout: 15s
   run_timeout: 3m
+  idle_stop: 10m                   # shut down a launched browser after this long without a run (frees ~600MB); relaunched on demand
 
 workers:
   functional: 1
@@ -75,6 +119,7 @@ schedule:
   p2: 6h
   failure_backoff: 5m
   tick: 10s
+  daily_at: "09:00"                 # 승인된(cadence: daily) 스크립트가 하루 한 번 도는 시각 (active_hours.tz 기준)
   # 정기 검사를 돌릴 시간대. 이 창 밖에서는 tick 이 새 작업을 큐에 넣지 않는다
   # (배포 감지로 시작되는 검사는 시간과 무관하게 실행된다).
   # 현황판 "시스템 활동 > 검사 시간대"에서 바꾸면 여기 값 대신 그 값이 쓰인다.
@@ -110,10 +155,25 @@ supervisor:
   max_site_routes: 500           # 발견 경로 목록 상한. /user/42 같은 건 /user/:id 로 접힌다
   deny_path_patterns: []         # 비우면 기본값: logout 계열 + delete/purge/destroy 계열
 
+# 승인 시 원본 Jira 이슈에 남기는 댓글(쓰기 측). 읽기 측은 discovery.jira 이다.
+jira:
+  cli: acli
+  comment_on_approve: true
+  dry_run: false                   # true = 게시 대신 evidence/jira/<KEY>-<ts>.md 로 저장
+
 agent:
   provider: pi
-  model: zai/glm-5.3-flash
+  model: zai/glm-5.3-flash         # models 가 비었을 때만 쓰이는 단일 모델
   thinking: high
+  # Ordered fallback chain: provider/model[:thinking]. A model that answers
+  # 429/quota/auth/5xx is put on cooldown and the next entry runs immediately
+  # (no backoff). With a single entry the legacy same-model retry applies.
+  # models:
+  #   - openai-codex/gpt-5.6-luna:low
+  #   - anthropic/claude-haiku-4-5:low
+  #   - zai/glm-5.3-flash:high
+  #   - google/gemini-2.5-flash:low
+  model_cooldown: 10m
   timeout: 20m                     # on timeout the session is resumed once with WRAP UP
   extension: ""                    # empty = bundled piext/vigil-browser.js
   env_map: { ZAI_API_KEY: Z_AI_API_KEY }
@@ -125,6 +185,8 @@ agent:
   continuations: 2                 # session resumes with a fresh budget before WRAP UP
   model_retries: 10                # in-conversation 429/5xx retries (3s, 6s, 12s ...)
   model_retry_delay: 3s
+  # domain_file: packs/my-app/domain.md   # 도메인 규칙 마크다운(12KB 상한)을 모든 에이전트 프롬프트에 주입
+                                          # 형식은 examples/domain.example.md 참고
 
 personas:
   qa_user:

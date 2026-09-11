@@ -63,7 +63,7 @@ const (
 )
 
 var runKinds = []model.JobKind{model.JobRunScenario, model.JobChromiumConfirm, model.JobValidateCandidate, model.JobChromiumEvidence}
-var agentKinds = []model.JobKind{model.JobAgentDiscover, model.JobAgentVerify, model.JobAgentRepair}
+var agentKinds = []model.JobKind{model.JobAgentDiscover, model.JobAgentVerify, model.JobAgentRepair, model.JobAgentReproduce}
 
 var errJobNotReady = errors.New("job is not ready")
 
@@ -166,7 +166,11 @@ func (s *Scheduler) ScanOnce(ctx context.Context) error {
 				continue
 			}
 			if isNew {
-				s.logf("scan: feature %s shipped sha=%s paths=%d routes=%v", ev.FeatureID, short(ev.ShippedSHA), len(ev.ChangedPaths), ev.Routes)
+				if model.IsShipKind(ev.Kind) {
+					s.logf("scan: feature %s shipped sha=%s paths=%d routes=%v", ev.FeatureID, short(ev.ShippedSHA), len(ev.ChangedPaths), ev.Routes)
+				} else {
+					s.logf("scan: %s %s from %s: %s routes=%v", ev.Kind, ev.Ref, ev.Source, ev.Summary, ev.Routes)
+				}
 			}
 		}
 	}
@@ -228,6 +232,10 @@ func (s *Scheduler) gateFeature(ctx context.Context, f *model.Feature) {
 		}
 		if err := s.orch.EnqueueForFeature(ctx, f, d); err != nil {
 			s.logf("orchestrate: enqueue %s: %v", f.ID, err)
+			return
+		}
+		if d != nil && d.Defer {
+			s.logf("orchestrate: %s sha=%s deferred: %s", f.ID, short(f.LatestShippedSHA), d.Reason)
 			return
 		}
 		if err := s.st.MarkFeatureHandled(ctx, s.project(), f.ID, f.LatestShippedSHA); err != nil {
@@ -322,11 +330,38 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 	return nil
 }
 
-// EnqueueScenario adds one RUN_SCENARIO job with the standard dedup key.
+// runPayload is the subset of a run job's JSON payload the scheduler reads.
+// The orchestrator writes the same "env" key in its jobPayload.
+type runPayload struct {
+	Env string `json:"env,omitempty"`
+}
+
+func parseRunPayload(raw string) runPayload {
+	var p runPayload
+	_ = json.Unmarshal([]byte(raw), &p)
+	return p
+}
+
+// EnqueueScenario adds one RUN_SCENARIO job on the default environment with the standard dedup key.
 func (s *Scheduler) EnqueueScenario(ctx context.Context, m *model.Scenario, priority int, browser model.Browser, featureID string) (int64, bool, error) {
+	return s.EnqueueScenarioEnv(ctx, m, priority, browser, featureID, "")
+}
+
+// EnqueueScenarioEnv adds one RUN_SCENARIO job on the named environment ("" =
+// default). Runs on a non-default environment dedup separately from the cadence job.
+func (s *Scheduler) EnqueueScenarioEnv(ctx context.Context, m *model.Scenario, priority int, browser model.Browser, featureID, envName string) (int64, bool, error) {
+	env, err := s.cfg.Env(envName)
+	if err != nil {
+		return 0, false, err
+	}
 	if browser == "" {
 		browser = model.Browser(s.cfg.Browser.Primary)
 	}
+	dedup := "run:" + m.ID
+	if env.Name != s.cfg.DefaultEnv().Name {
+		dedup += "@" + env.Name
+	}
+	payload, _ := json.Marshal(runPayload{Env: env.Name})
 	return s.st.EnqueueJob(ctx, &model.Job{
 		ProjectID:   s.project(),
 		Kind:        model.JobRunScenario,
@@ -334,8 +369,9 @@ func (s *Scheduler) EnqueueScenario(ctx context.Context, m *model.Scenario, prio
 		ScenarioID:  m.ID,
 		FeatureID:   featureID,
 		Browser:     browser,
+		Payload:     string(payload),
 		MaxAttempts: runJobMaxAttempts,
-	}, "run:"+m.ID)
+	}, dedup)
 }
 
 // PriorityFor maps scenario state/class/recent failure to PRD §12 priority.
@@ -392,7 +428,7 @@ func (s *Scheduler) scenarioBrowser(ctx context.Context, m *model.Scenario) mode
 	if v, err := s.st.GetScenarioVersion(ctx, s.project(), m.ID, m.CurrentVersion); err == nil {
 		if sc, err := dsl.Parse([]byte(v.YAML)); err == nil {
 			switch {
-			case sc.Browser.RequiresChromium:
+			case sc.RequiresChromiumEngine():
 				b = model.BrowserChromium
 			case sc.Browser.Primary != "":
 				b = model.Browser(sc.Browser.Primary)
@@ -486,6 +522,23 @@ func (s *Scheduler) reapAndTick(ctx context.Context) {
 	}
 	if err := s.Tick(ctx); err != nil && ctx.Err() == nil {
 		s.logf("%v", err)
+	}
+	s.stopIdleBrowsers()
+}
+
+// stopIdleBrowsers releases launched browsers that have been idle for
+// browser.idle_stop. A resident Chromium and Lightpanda hold several hundred
+// MB between runs; outside active hours that is hours of dead weight. The next
+// run relaunches them (a second or two).
+func (s *Scheduler) stopIdleBrowsers() {
+	idler, ok := s.run.(interface {
+		StopIdle(time.Duration) []model.Browser
+	})
+	if !ok || s.cfg.Browser.IdleStop.Duration <= 0 {
+		return
+	}
+	if stopped := idler.StopIdle(s.cfg.Browser.IdleStop.Duration); len(stopped) > 0 {
+		s.logf("browser: stopped %v after %s idle; relaunched on the next run", stopped, s.cfg.Browser.IdleStop.Duration)
 	}
 }
 
@@ -643,7 +696,7 @@ func (s *Scheduler) execute(ctx context.Context, workerID string, job *model.Job
 	switch job.Kind {
 	case model.JobRunScenario, model.JobChromiumConfirm, model.JobValidateCandidate, model.JobChromiumEvidence:
 		return s.runScenarioJob(ctx, job)
-	case model.JobAgentDiscover, model.JobAgentVerify, model.JobAgentRepair:
+	case model.JobAgentDiscover, model.JobAgentVerify, model.JobAgentRepair, model.JobAgentReproduce:
 		if s.orch == nil {
 			_ = s.st.CompleteJob(fin, job.ID, "no orchestrator configured for agent jobs")
 			return nil
@@ -724,6 +777,24 @@ func (s *Scheduler) runScenarioJob(ctx context.Context, job *model.Job) *model.R
 	}
 	flows := s.loadFlows(fin)
 
+	mutation := model.Mutation(sc.Scenario.Mutation)
+	if mutation == "" {
+		mutation = m.Mutation
+	}
+	if mutation == "" {
+		mutation = model.MutationReadOnly
+	}
+	env, err := s.cfg.Env(parseRunPayload(job.Payload).Env)
+	if err != nil {
+		return fail("environment: " + err.Error())
+	}
+	if err := config.EnvAllows(env, string(mutation)); err != nil {
+		// Refused, never run: FAILED with the reason, no backoff (the default-env cadence is unaffected).
+		s.logf("job %d %s: %s", job.ID, m.ID, err)
+		_ = s.st.CompleteJob(fin, job.ID, err.Error())
+		return nil
+	}
+
 	locks := uniqStrings(append(append([]string{}, m.Locks...), sc.Resources.Locks...))
 	owner := fmt.Sprintf("job-%d", job.ID)
 	ok, err := s.st.TryAcquireLocks(fin, locks, owner, s.cfg.Browser.RunTimeout.Duration*2)
@@ -748,20 +819,13 @@ func (s *Scheduler) runScenarioJob(ctx context.Context, job *model.Job) *model.R
 		}
 	}()
 
-	mutation := model.Mutation(sc.Scenario.Mutation)
-	if mutation == "" {
-		mutation = m.Mutation
-	}
-	if mutation == "" {
-		mutation = model.MutationReadOnly
-	}
 	featureID, sha := s.resolveFeature(fin, job, m)
 
 	if mutation == model.MutationDestructive && !s.cfg.Policy.AllowDestructive {
 		reason := "destructive mutation requires policy.allow_destructive"
 		s.logf("job %d %s: %s → NEEDS_REVIEW without running", job.ID, m.ID, reason)
 		res := &runner.Result{Passed: false, Class: runner.FailNone, Browser: job.Browser, StartedAt: s.Now(), FinishedAt: s.Now(), Error: reason}
-		run := s.persistRun(fin, job, m, v, featureID, sha, res, model.OutcomeNeedsReview, reason, 0, "")
+		run := s.persistRun(fin, job, m, v, featureID, sha, env.Name, res, model.OutcomeNeedsReview, reason, 0, "")
 		_ = s.st.SetScenarioState(fin, s.project(), m.ID, model.StateNeedsReview)
 		s.afterRun(fin, job, run, res)
 		_ = s.st.CompleteJob(fin, job.ID, "")
@@ -788,7 +852,9 @@ func (s *Scheduler) runScenarioJob(ctx context.Context, job *model.Job) *model.R
 			Scenario:         sc,
 			Flows:            flows,
 			Browser:          browser,
-			BaseURL:          s.cfg.Target.BaseURL,
+			BaseURL:          env.BaseURL,
+			Environment:      env.Name,
+			AllowedHosts:     env.AllowedHosts,
 			Persona:          persona,
 			EvidenceDir:      dir,
 			StepTimeout:      s.cfg.Browser.StepTimeout.Duration,
@@ -811,7 +877,7 @@ func (s *Scheduler) runScenarioJob(ctx context.Context, job *model.Job) *model.R
 		if res.FinishedAt.IsZero() {
 			res.FinishedAt = s.Now()
 		}
-		if res.Passed || attempt > 1 || mutation != model.MutationReadOnly || s.cfg.Policy.RetryOnFail <= 0 || ctx.Err() != nil {
+		if res.Passed || attempt > 1 || mutation != model.MutationReadOnly || s.cfg.Policy.RetryOnFail <= 0 || ctx.Err() != nil || res.Class == runner.FailEnvironment {
 			break
 		}
 		prevFailed = true
@@ -830,17 +896,18 @@ func (s *Scheduler) runScenarioJob(ctx context.Context, job *model.Job) *model.R
 		PrevFailed:    prevFailed,
 		TargetHealthy: healthy,
 	})
-	run := s.persistRun(fin, job, m, v, featureID, sha, res, outcome, reason, attempt, dir)
+	run := s.persistRun(fin, job, m, v, featureID, sha, env.Name, res, outcome, reason, attempt, dir)
 	s.enqueueEvidenceCapture(fin, job, run)
 	s.afterRun(fin, job, run, res)
 	_ = s.st.CompleteJob(fin, job.ID, "")
-	s.logf("job %d %s v%d %s → %s%s %dms attempt=%d evidence=%s", job.ID, m.ID, v.Version, browser, outcome, parens(reason), run.DurationMs, attempt, dir)
+	s.logf("job %d %s v%d %s env=%s → %s%s %dms attempt=%d evidence=%s", job.ID, m.ID, v.Version, browser, env.Name, outcome, parens(reason), run.DurationMs, attempt, dir)
 	return run
 }
 
 // persistRun records the run, artifacts, PASS marker, budget, scenario counters and next due.
-func (s *Scheduler) persistRun(ctx context.Context, job *model.Job, m *model.Scenario, v *model.ScenarioVersion, featureID, sha string, res *runner.Result, outcome model.Outcome, reason string, attempt int, dir string) *model.Run {
+func (s *Scheduler) persistRun(ctx context.Context, job *model.Job, m *model.Scenario, v *model.ScenarioVersion, featureID, sha, env string, res *runner.Result, outcome model.Outcome, reason string, attempt int, dir string) *model.Run {
 	run := &model.Run{
+		Environment:     env,
 		JobID:           job.ID,
 		ProjectID:       s.project(),
 		ScenarioID:      m.ID,
@@ -855,7 +922,7 @@ func (s *Scheduler) persistRun(ctx context.Context, job *model.Job, m *model.Sce
 		DurationMs:      res.Duration().Milliseconds(),
 		Error:           res.Error,
 		EvidenceDir:     dir,
-		DeployMarker:    s.currentMarker(ctx),
+		DeployMarker:    s.currentMarker(ctx, env),
 	}
 	if run.Browser == "" {
 		run.Browser = job.Browser
@@ -921,6 +988,15 @@ func (s *Scheduler) persistRun(ctx context.Context, job *model.Job, m *model.Sce
 // scheduleNext sets the cadence-based next due time (the orchestrator's
 // AfterRun may override it; this keeps the loop sane when it cannot).
 func (s *Scheduler) scheduleNext(ctx context.Context, m *model.Scenario, outcome model.Outcome) {
+	if m.State == model.StatePendingApproval {
+		return // never due until a human decides
+	}
+	if m.Cadence == config.DailyCadence {
+		if err := s.st.SetScenarioNextDue(ctx, s.project(), m.ID, s.cfg.NextDailyRun(s.Now())); err != nil {
+			s.logf("%s: next due: %v", m.ID, err)
+		}
+		return
+	}
 	var d time.Duration
 	switch outcome {
 	case model.OutcomePass, model.OutcomeQAFlake:
@@ -957,7 +1033,7 @@ func (s *Scheduler) afterRun(ctx context.Context, job *model.Job, run *model.Run
 }
 
 func (s *Scheduler) pickBrowser(job *model.Job, sc *dsl.Scenario) model.Browser {
-	if job.Kind == model.JobChromiumConfirm || job.Kind == model.JobChromiumEvidence || sc.Browser.RequiresChromium {
+	if job.Kind == model.JobChromiumConfirm || job.Kind == model.JobChromiumEvidence || sc.RequiresChromiumEngine() {
 		return model.BrowserChromium
 	}
 	if job.Browser != "" {
@@ -1014,6 +1090,7 @@ func (s *Scheduler) writeRunSummary(dir string, run *model.Run, reason string) {
 	doc := map[string]any{
 		"scenario_id":      run.ScenarioID,
 		"scenario_version": run.ScenarioVersion,
+		"environment":      run.Environment,
 		"feature_id":       run.FeatureID,
 		"shipped_sha":      run.ShippedSHA,
 		"browser":          run.Browser,
@@ -1037,7 +1114,12 @@ func (s *Scheduler) writeRunSummary(dir string, run *model.Run, reason string) {
 func (s *Scheduler) probeTarget(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, s.cfg.Target.BaseURL, nil)
+	// GET, not HEAD: some origins answer GET in milliseconds but never complete a HEAD, so
+	// the probe timed out and called a healthy target unhealthy. That verdict decides whether
+	// a failing script counts as drift worth repairing or as an environment problem to
+	// ignore, so a method the server dislikes silently switches self-repair off. GET is also
+	// what the browser under test does.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.cfg.Target.BaseURL, nil)
 	if err != nil {
 		return false
 	}
@@ -1061,8 +1143,30 @@ func (s *Scheduler) RunJobNow(ctx context.Context, jobID int64) error {
 	return nil
 }
 
-// RunScenarioNow enqueues (dedup) and executes one scenario inline, returning the recorded run.
+// RunAgentJobNow leases and executes one READY agent job inline. Operator-initiated
+// work (`vigil reproduce`, its follow-up repairs) already bypasses
+// budget.agent_tasks_per_hour by being executed here, and the run still records its
+// agent budget event. Unlike the loop's user-request claim this keeps the job's
+// priority: the row an operator created stays a user request for `status`/the UI,
+// and the requeued job (model unavailable) keeps its precedence.
+func (s *Scheduler) RunAgentJobNow(ctx context.Context, jobID int64) error {
+	job, err := s.claimJobByID(ctx, jobID, inlineWorker)
+	if err != nil {
+		return err
+	}
+	s.execute(ctx, inlineWorker, job)
+	return nil
+}
+
+// RunScenarioNow enqueues (dedup) and executes one scenario inline on the default environment.
 func (s *Scheduler) RunScenarioNow(ctx context.Context, scenarioID string, browser model.Browser) (*model.Run, error) {
+	return s.RunScenarioNowEnv(ctx, scenarioID, browser, "")
+}
+
+// RunScenarioNowEnv enqueues (dedup) and executes one scenario inline on the named
+// environment ("" = default), returning the recorded run. A read-only environment
+// refuses non-read-only scenarios: the job ends FAILED and the error is returned.
+func (s *Scheduler) RunScenarioNowEnv(ctx context.Context, scenarioID string, browser model.Browser, envName string) (*model.Run, error) {
 	m, err := s.st.GetScenario(ctx, s.project(), scenarioID)
 	if err != nil {
 		return nil, fmt.Errorf("scenario %s: %w", scenarioID, err)
@@ -1070,7 +1174,7 @@ func (s *Scheduler) RunScenarioNow(ctx context.Context, scenarioID string, brows
 	if browser == "" {
 		browser = s.scenarioBrowser(ctx, m)
 	}
-	id, created, err := s.EnqueueScenario(ctx, m, model.PriorityRecentFailure, browser, "")
+	id, created, err := s.EnqueueScenarioEnv(ctx, m, model.PriorityRecentFailure, browser, "", envName)
 	if err != nil {
 		return nil, err
 	}
@@ -1189,16 +1293,34 @@ func parens(s string) string {
 	return " (" + s + ")"
 }
 
-// currentMarker tags a run with the deployed build it verified when the gate can tell.
-func (s *Scheduler) currentMarker(ctx context.Context) string {
-	cm, ok := s.gate.(interface {
-		CurrentMarker(context.Context) (string, error)
-	})
-	if !ok || s.gate == nil {
+// currentMarker tags a run with the deployed build of the environment it ran
+// against: environments serve different builds, so the default environment's
+// marker would misattribute a --env prod run to the wrong deployment.
+func (s *Scheduler) currentMarker(ctx context.Context, envName string) string {
+	if s.gate == nil {
 		return ""
 	}
 	mctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	if cm, ok := s.gate.(interface {
+		CurrentMarkerFor(context.Context, config.Environment) (string, error)
+	}); ok {
+		env, err := s.cfg.Env(envName)
+		if err != nil {
+			env = s.cfg.DefaultEnv()
+		}
+		m, err := cm.CurrentMarkerFor(mctx, env)
+		if err != nil {
+			return ""
+		}
+		return m
+	}
+	cm, ok := s.gate.(interface {
+		CurrentMarker(context.Context) (string, error)
+	})
+	if !ok {
+		return ""
+	}
 	m, err := cm.CurrentMarker(mctx)
 	if err != nil {
 		return ""
@@ -1216,15 +1338,15 @@ func (s *Scheduler) enqueueEvidenceCapture(ctx context.Context, job *model.Job, 
 	if job.Kind == model.JobChromiumEvidence || job.Kind == model.JobChromiumConfirm {
 		return
 	}
-	has, err := s.st.HasRunForDeployment(ctx, s.project(), run.ScenarioID, run.DeployMarker, model.BrowserChromium)
+	has, err := s.st.HasRunForDeployment(ctx, s.project(), run.ScenarioID, run.DeployMarker, run.Environment, model.BrowserChromium)
 	if err != nil || has {
 		return
 	}
 	id, created, err := s.st.EnqueueJob(ctx, &model.Job{
 		ProjectID: s.project(), Kind: model.JobChromiumEvidence, Priority: model.PriorityBackground, Browser: model.BrowserChromium,
 		ScenarioID: run.ScenarioID, FeatureID: run.FeatureID, MaxAttempts: 1, Payload: job.Payload,
-	}, "evidence:"+run.ScenarioID+":"+run.DeployMarker)
+	}, "evidence:"+run.ScenarioID+":"+run.Environment+":"+run.DeployMarker)
 	if err == nil && created {
-		s.logf("evidence: queued Chromium capture job %d for %s on deployment %s", id, run.ScenarioID, run.DeployMarker)
+		s.logf("evidence: queued Chromium capture job %d for %s on deployment %s (env %s)", id, run.ScenarioID, run.DeployMarker, run.Environment)
 	}
 }

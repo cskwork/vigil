@@ -44,9 +44,13 @@ type Gate struct {
 	// Log receives WAITING-on-error diagnostics; defaults to the std logger.
 	Log *log.Logger
 
-	mu       sync.Mutex
-	marker   string
-	markerAt time.Time
+	mu      sync.Mutex
+	markers map[string]markerCache // environment name -> last probed marker
+}
+
+type markerCache struct {
+	marker string
+	at     time.Time
 }
 
 func New(cfg *config.Config) *Gate {
@@ -64,6 +68,11 @@ func New(cfg *config.Config) *Gate {
 func (g *Gate) Check(ctx context.Context, f *model.Feature, lastMarker string) (state model.Readiness, marker string, err error) {
 	if f == nil {
 		return model.ReadinessUnknown, lastMarker, fmt.Errorf("gate: nil feature")
+	}
+	if !model.IsShipKind(f.Kind) {
+		// An issue or a log signature has nothing to wait for: no deployment
+		// follows it, so it is READY at once and never probes the target.
+		return model.ReadinessReady, lastMarker, nil
 	}
 	r := g.cfg.Deployment.Readiness
 	switch r.Strategy {
@@ -151,32 +160,60 @@ func (g *Gate) FetchAssetMarker(ctx context.Context, page string) (string, error
 	return m[1], nil
 }
 
-// CurrentMarker returns the deployed build marker of the target right now
-// (asset_version strategy), cached for 60s so every run can be tagged cheaply.
+// MarkerPageFor returns the page whose asset marker identifies env's deployment:
+// the environment's asset_page, else deployment.readiness.asset_page for the
+// default environment, else that environment's base URL plus the entry path.
+func (g *Gate) MarkerPageFor(env config.Environment) string {
+	if p := strings.TrimSpace(env.AssetPage); p != "" {
+		return p
+	}
+	if env.Name == "" || env.Name == g.cfg.DefaultEnv().Name {
+		if p := strings.TrimSpace(g.cfg.Deployment.Readiness.AssetPage); p != "" {
+			return p
+		}
+	}
+	base := strings.TrimRight(env.BaseURL, "/")
+	if base == "" {
+		base = strings.TrimRight(g.cfg.Target.BaseURL, "/")
+	}
+	if entry := g.cfg.EntryPath(); entry != "" && entry != "/" {
+		return base + "/" + strings.TrimLeft(entry, "/")
+	}
+	return base
+}
+
+// CurrentMarkerFor returns the deployed build marker of one environment right
+// now (asset_version strategy), cached per environment for 60s so every run can
+// be tagged cheaply. Two environments serve different builds, so a run must be
+// tagged with the marker of the environment it actually ran against.
 // Other strategies return "" (no per-run build identity available).
-func (g *Gate) CurrentMarker(ctx context.Context) (string, error) {
+func (g *Gate) CurrentMarkerFor(ctx context.Context, env config.Environment) (string, error) {
 	if g.cfg.Deployment.Readiness.Strategy != "asset_version" {
 		return "", nil
 	}
+	key := env.Name
 	g.mu.Lock()
-	if time.Since(g.markerAt) < 60*time.Second {
-		m := g.marker
+	if c, ok := g.markers[key]; ok && time.Since(c.at) < 60*time.Second {
 		g.mu.Unlock()
-		return m, nil
+		return c.marker, nil
 	}
 	g.mu.Unlock()
-	page := g.cfg.Deployment.Readiness.AssetPage
-	if page == "" {
-		page = g.AssetPage(nil)
-	}
-	m, err := g.FetchAssetMarker(ctx, page)
+	m, err := g.FetchAssetMarker(ctx, g.MarkerPageFor(env))
 	if err != nil {
 		return "", err
 	}
 	g.mu.Lock()
-	g.marker, g.markerAt = m, time.Now()
+	if g.markers == nil {
+		g.markers = map[string]markerCache{}
+	}
+	g.markers[key] = markerCache{marker: m, at: time.Now()}
 	g.mu.Unlock()
 	return m, nil
+}
+
+// CurrentMarker answers for the default environment.
+func (g *Gate) CurrentMarker(ctx context.Context) (string, error) {
+	return g.CurrentMarkerFor(ctx, g.cfg.DefaultEnv())
 }
 
 func (g *Gate) get(ctx context.Context, url string) (string, error) {

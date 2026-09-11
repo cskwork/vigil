@@ -1,0 +1,18 @@
+[
+  {
+    "key": "orders-5xx-2026-09-10T02",
+    "kind": "log",
+    "summary": "12 HTTP 500 responses on POST /api/orders in the last hour (order-service)",
+    "details": "sample: 2026-09-10T02:14:07Z ERROR OrderController NullPointerException at OrderMapper.toDto(OrderMapper.java:88)\nsample: 2026-09-10T02:16:41Z ERROR ... same stack",
+    "at": "2026-09-10T02:20:00Z",
+    "routes": ["/orders/new"]
+  },
+  {
+    "key": "OPS-4412",
+    "kind": "issue",
+    "summary": "Cart total ignores the coupon after removing an item",
+    "details": "Steps: add 2 items, apply coupon SAVE10, remove one item → total still shows the pre-removal discount.",
+    "at": "2026-09-10T01:05:00Z",
+    "routes": ["/cart"]
+  }
+]

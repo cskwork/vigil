@@ -223,6 +223,18 @@ func (c *capture) findRequest(pred func(NetworkEvent) bool) (NetworkEvent, netwo
 	return NetworkEvent{}, "", false
 }
 
+// findLastRequest returns the most recent captured request accepted by pred.
+func (c *capture) findLastRequest(pred func(NetworkEvent) bool) (NetworkEvent, network.RequestID, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := len(c.network) - 1; i >= 0; i-- {
+		if pred(c.network[i]) {
+			return c.network[i], c.reqIDs[i], true
+		}
+	}
+	return NetworkEvent{}, "", false
+}
+
 // snapshotNetwork returns a copy of the captured network events.
 func (c *capture) snapshotNetwork() []NetworkEvent {
 	c.mu.Lock()

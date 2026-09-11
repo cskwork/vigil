@@ -9,15 +9,19 @@ import (
 
 // Spec is one execution request for the deterministic QA runner.
 type Spec struct {
-	ProjectID   string
-	Scenario    *dsl.Scenario
-	Flows       map[string]*dsl.Flow
-	Browser     model.Browser
-	BaseURL     string
-	Persona     map[string]string // username/password/extra (never logged)
-	EvidenceDir string            // run artifacts root for this attempt
-	StepTimeout time.Duration
-	RunTimeout  time.Duration
+	ProjectID string
+	Scenario  *dsl.Scenario
+	Flows     map[string]*dsl.Flow
+	Browser   model.Browser
+	BaseURL   string
+	// Environment names the target environment; AllowedHosts is its allowlist.
+	// A goto whose URL leaves the allowlist fails the run with FailEnvironment.
+	Environment  string
+	AllowedHosts []string
+	Persona      map[string]string // username/password/extra (never logged)
+	EvidenceDir  string            // run artifacts root for this attempt
+	StepTimeout  time.Duration
+	RunTimeout   time.Duration
 	// CaptureDOMOnFail writes dom.html on failure (default true).
 	// The zero value means "default": dom.html is always captured on failure.
 	CaptureDOMOnFail bool
@@ -72,7 +76,11 @@ const (
 	FailTransport       FailureClass = "transport"        // DNS/TLS/connection refused/gateway
 	FailAuth            FailureClass = "auth"             // 401/403 on required API, redirected to login
 	FailInternal        FailureClass = "internal"         // runner bug
+	FailEnvironment     FailureClass = "environment"      // goto URL outside the environment allowlist
 )
+
+// ErrOutsideAllowlist is the reason text of an environment allowlist violation.
+const ErrOutsideAllowlist = "url outside environment allowlist"
 
 // Result is the complete outcome of one attempt.
 type Result struct {

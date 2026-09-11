@@ -57,10 +57,14 @@ usage: vigil [-c vigil.yaml] [--json] <command> [flags]
   import --history        ingest the last N historical features (no gate/plan)
   scan                    import files, ingest new features once, deployment gate, orchestrate
   discover <feature>      enqueue a Browser Agent discovery task for a feature and run it now
+  reproduce <feature>     reproduce a known issue/log feature with the Browser Agent now, settling
+                          a failed candidate through its repair jobs inline; an unfinished repair of
+                          that feature is resumed [--dry-run] [--no-repair] [--fresh]
   request <file.yaml>  hand a manual QA request (flow, accounts, mutation) to the orchestrator [--queue] [--dry-run]
   reparse <agent-dir>  rebuild agent-result.{json,yaml} of a finished agent run with the current parser
   prune [--dry-run]    apply evidence retention now (age policy + evidence.max_total_mb + db retention)
-  run <scenario>          run one scenario now            [--browser lightpanda|chromium]
+  run <scenario>          run one scenario now            [--browser lightpanda|chromium] [--env <name>]
+  run ... --env <name>    run on a target.environments entry (read-only envs refuse mutating scenarios, exit 2)
   run --feature <f>       run every scenario covering a feature
   run --impacted <f>      run scenarios impacted by a feature (feature/capability/route/path links)
   run --all               run every ACTIVE/SOAK scenario
@@ -68,17 +72,23 @@ usage: vigil [-c vigil.yaml] [--json] <command> [flags]
   status                  queue / corpus / features / incidents snapshot
   coverage                coverage links, metrics and corpus health
   incidents [--all]       list open (or all) incidents
-  approve <scenario>      NEEDS_REVIEW/CANDIDATE → SOAK (soak counter reset, due now)
+  findings [--all] [--limit N]   list open (or all) data-analyst findings (agent-reported value mismatches)
+  findings resolve <id>   mark one finding RESOLVED
+  approve [--soak] <scenario>  PENDING_APPROVAL → ACTIVE (daily at schedule.daily_at, Jira comment);
+                          other states (or --soak) → SOAK (soak counter reset, due now)
   reject <scenario>       → REJECTED
   list [--state X]        list scenarios
   show <scenario>         current script yaml + coverage links + last runs
+  export <scenario>       write a Playwright spec (<dir>/<id>.spec.ts; the YAML stays canonical)
+         [--all] [--format playwright] [--env <name>] [-o export/playwright]
+                          --all exports every ACTIVE/SOAK/PENDING_APPROVAL/NEEDS_REVIEW scenario
   validate                validate every scenario/flow file on disk
   doctor [--install]      check sqlite, browsers, pi, keys, sandbox, target, evidence dir
 
   serve [--addr 127.0.0.1:8787]   read-only live web view (what runs, what the AI agent does)
   loop --ui [addr]               loop + the same live view in-process
 
-global flags: -c <config> (default vigil.yaml)   --json (status/coverage/incidents/list)
+global flags: -c <config> (default vigil.yaml)   --json (status/coverage/incidents/findings/list)
 `)
 }
 
@@ -149,6 +159,8 @@ func (a *app) run(ctx context.Context, cmd string, args []string) (int, error) {
 		return 0, a.cmdRequest(ctx, args)
 	case "discover":
 		return 0, a.cmdDiscover(ctx, args)
+	case "reproduce":
+		return 0, a.cmdReproduce(ctx, args)
 	case "run":
 		return a.cmdRun(ctx, args)
 	case "loop":
@@ -161,6 +173,8 @@ func (a *app) run(ctx context.Context, cmd string, args []string) (int, error) {
 		return 0, a.cmdCoverage(ctx)
 	case "incidents":
 		return 0, a.cmdIncidents(ctx, args)
+	case "findings":
+		return 0, a.cmdFindings(ctx, args)
 	case "approve":
 		return 0, a.cmdApprove(ctx, args)
 	case "reject":
@@ -169,6 +183,8 @@ func (a *app) run(ctx context.Context, cmd string, args []string) (int, error) {
 		return 0, a.cmdList(ctx, args)
 	case "show":
 		return 0, a.cmdShow(ctx, args)
+	case "export":
+		return a.cmdExport(ctx, args)
 	case "validate":
 		return a.cmdValidate()
 	case "doctor":
@@ -259,7 +275,7 @@ func (a *app) buildOrchestrator(run *runner.Runner, ag agent.Adapter) *orchestra
 func (a *app) buildIngest() ingest.Adapter {
 	in, err := ingest.New(a.cfg, a.st)
 	if err != nil {
-		a.log.Printf("warn: discovery adapter %q unavailable: %v", a.cfg.Discovery.Adapter, err)
+		a.log.Printf("warn: discovery adapter %q unavailable: %v", strings.Join(a.cfg.AdapterNames(), ","), err)
 		return nil
 	}
 	return in

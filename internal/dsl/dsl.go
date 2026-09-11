@@ -99,6 +99,7 @@ type Step struct {
 	AssertCount      *CountAssert   `yaml:"assert_count,omitempty"`
 	AssertRequest    *RequestAssert `yaml:"assert_request,omitempty"`
 	AssertAttr       *AttrAssert    `yaml:"assert_attr,omitempty"`
+	AssertData       *DataAssert    `yaml:"assert_data,omitempty"`
 	ExpectPopup      *PopupArgs     `yaml:"expect_popup,omitempty"`
 	Eval             *EvalArgs      `yaml:"eval,omitempty"`
 	UseFlow          string         `yaml:"use_flow,omitempty"`
@@ -163,6 +164,26 @@ type AttrAssert struct {
 	Contains string `yaml:"contains,omitempty"`
 }
 
+// DataAssert compares a displayed value with the API payload that produced it
+// (data-analyst check): innerText of UI (after UIRegex when set) vs. the value at
+// API.JSONPath in the last captured response matching API.
+type DataAssert struct {
+	UI      Locator `yaml:"ui"`
+	UIRegex string  `yaml:"ui_regex,omitempty"` // first match (group 1 when present) is compared
+	API     DataAPI `yaml:"api"`
+	Compare string  `yaml:"compare"` // text (trimmed) | number | contains (UI contains API value)
+}
+
+// DataAPI selects the captured response and the value inside its JSON body.
+type DataAPI struct {
+	URLContains string `yaml:"url_contains"`
+	JSONPath    string `yaml:"json_path"` // $, .key, [N], [*] (first element), ["key with spaces"]
+	Method      string `yaml:"method,omitempty"`
+}
+
+// DataCompareModes are the accepted assert_data.compare values.
+var DataCompareModes = map[string]bool{"text": true, "number": true, "contains": true}
+
 // PopupArgs waits for a new page/target opened by the previous action and
 // switches the run context to it.
 type PopupArgs struct {
@@ -214,6 +235,8 @@ func (s Step) Kind() string {
 		return "assert_request"
 	case s.AssertAttr != nil:
 		return "assert_attr"
+	case s.AssertData != nil:
+		return "assert_data"
 	case s.ExpectPopup != nil:
 		return "expect_popup"
 	case s.Eval != nil:
@@ -240,6 +263,7 @@ func Parse(data []byte) (*Scenario, error) {
 	if err := dec.Decode(&sc); err != nil {
 		return nil, fmt.Errorf("dsl parse: %w", err)
 	}
+	sc.Normalize()
 	return &sc, nil
 }
 
@@ -262,6 +286,7 @@ func ParseFlow(data []byte) (*Flow, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("flow parse: %w", err)
 	}
+	f.Normalize()
 	return &f, nil
 }
 
@@ -278,6 +303,112 @@ func ParseFlowFile(path string) (*Flow, error) {
 }
 
 func (s *Scenario) Marshal() ([]byte, error) { return yaml.Marshal(s) }
+
+// ---- normalization ---------------------------------------------------------
+//
+// Models (and humans) write locator kinds the DSL never defined: `by: link`,
+// `by: button`, `by: placeholder`, `by: testid`, `by: selector`. Parse maps those
+// aliases onto the canonical kinds before validation so files, agent candidates
+// and repair patches all benefit; unknown kinds (xpath, ...) still fail Validate.
+
+// byAliases maps a lower-cased `by` alias to its canonical kind. Role shorthands
+// (link, button) also set Locator.Role.
+var byAliases = map[string]string{
+	"link":        "role",
+	"button":      "role",
+	"placeholder": "label",
+	"testid":      "test_id",
+	"data-testid": "test_id",
+	"test-id":     "test_id",
+	"selector":    "css",
+}
+
+// roleShorthands are `by` values that name the role itself.
+var roleShorthands = map[string]bool{"link": true, "button": true}
+
+// Normalize rewrites locator aliases in place (see byAliases). Idempotent.
+func (l *Locator) Normalize() {
+	if l == nil {
+		return
+	}
+	by := strings.ToLower(strings.TrimSpace(l.By))
+	if roleShorthands[by] {
+		if l.Role == "" {
+			l.Role = by
+		}
+		if l.Name == "" && l.Text != "" {
+			l.Name = l.Text // role locators match on accessible name
+		}
+	}
+	if canon, ok := byAliases[by]; ok {
+		by = canon
+	}
+	l.By = by
+}
+
+// Normalize applies Locator.Normalize to every locator of the scenario.
+func (s *Scenario) Normalize() {
+	if s == nil {
+		return
+	}
+	normalizeSteps(s.Steps)
+}
+
+// Normalize applies Locator.Normalize to every locator of the flow.
+func (f *Flow) Normalize() {
+	if f == nil {
+		return
+	}
+	normalizeSteps(f.Steps)
+}
+
+func normalizeSteps(steps []Step) {
+	for i := range steps {
+		for _, l := range stepLocators(&steps[i]) {
+			l.Normalize()
+		}
+	}
+}
+
+// stepLocators returns every locator a step carries (nil-safe).
+func stepLocators(s *Step) []*Locator {
+	var out []*Locator
+	add := func(l *Locator) {
+		if l != nil {
+			out = append(out, l)
+		}
+	}
+	add(s.Click)
+	add(s.Hover)
+	add(s.WaitFor)
+	add(s.AssertVisible)
+	add(s.AssertNotVisible)
+	if s.Fill != nil {
+		add(&s.Fill.Locator)
+	}
+	if s.Type != nil {
+		add(&s.Type.Locator)
+	}
+	if s.Select != nil {
+		add(&s.Select.Locator)
+	}
+	if s.AssertText != nil {
+		add(s.AssertText.In)
+	}
+	if s.AssertNoText != nil {
+		add(s.AssertNoText.In)
+	}
+	if s.AssertCount != nil {
+		add(&s.AssertCount.Locator)
+	}
+	if s.AssertAttr != nil {
+		add(&s.AssertAttr.Locator)
+	}
+	if s.AssertData != nil {
+		add(&s.AssertData.UI)
+	}
+	return out
+}
 
 // ---- validation ---------------------------------------------------------
 
@@ -384,7 +515,7 @@ func countActions(s Step) int {
 	for _, set := range []bool{s.Goto != "", s.Click != nil, s.Fill != nil, s.Type != nil, s.Press != "", s.Select != nil,
 		s.Hover != nil, s.WaitFor != nil, s.WaitMs != 0, s.WaitURL != nil, s.AssertText != nil, s.AssertNoText != nil,
 		s.AssertVisible != nil, s.AssertNotVisible != nil, s.AssertURL != nil, s.AssertCount != nil, s.AssertRequest != nil,
-		s.AssertAttr != nil, s.ExpectPopup != nil, s.Eval != nil, s.UseFlow != "", s.Screenshot != ""} {
+		s.AssertAttr != nil, s.AssertData != nil, s.ExpectPopup != nil, s.Eval != nil, s.UseFlow != "", s.Screenshot != ""} {
 		if set {
 			n++
 		}
@@ -488,6 +619,8 @@ func validateStep(s Step) error {
 			return fmt.Errorf("attr required")
 		}
 		return validateLocator(&s.AssertAttr.Locator)
+	case "assert_data":
+		return validateDataAssert(s.AssertData)
 	case "eval":
 		if s.Eval.Script == "" {
 			return fmt.Errorf("script required")
@@ -496,6 +629,30 @@ func validateStep(s Step) error {
 		if !strings.HasPrefix(s.Goto, "/") && !strings.HasPrefix(s.Goto, "http") {
 			return fmt.Errorf("goto must be a path or absolute URL")
 		}
+	}
+	return nil
+}
+
+func validateDataAssert(a *DataAssert) error {
+	if err := validateLocator(&a.UI); err != nil {
+		return fmt.Errorf("ui: %w", err)
+	}
+	if a.UIRegex != "" {
+		if _, err := regexp.Compile(a.UIRegex); err != nil {
+			return fmt.Errorf("ui_regex: %w", err)
+		}
+	}
+	if a.API.URLContains == "" {
+		return fmt.Errorf("api.url_contains required")
+	}
+	if a.API.JSONPath == "" {
+		return fmt.Errorf("api.json_path required")
+	}
+	if !strings.HasPrefix(a.API.JSONPath, "$") {
+		return fmt.Errorf("api.json_path %q must start with $", a.API.JSONPath)
+	}
+	if !DataCompareModes[a.Compare] {
+		return fmt.Errorf("compare %q must be text|number|contains", a.Compare)
 	}
 	return nil
 }
@@ -534,6 +691,28 @@ func SemanticTarget(l *Locator) string {
 
 // Fingerprint computes the logical-scenario hash; flows are expanded so a
 // scenario using a flow equals its inlined equivalent.
+// NeedsPopupTarget reports whether the script waits for a new page target. Steps reached
+// through use_flow are not scanned; declare browser.popup: true when the expect_popup
+// lives in a Reusable Flow.
+func (s *Scenario) NeedsPopupTarget() bool {
+	if s.Browser.Popup {
+		return true
+	}
+	for i := range s.Steps {
+		if s.Steps[i].ExpectPopup != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// RequiresChromiumEngine reports whether only Chromium can run this scenario. A browser
+// that cannot create a popup target can never pass a script that waits for one, so the
+// engine follows from the script itself and not only from the author's requires_chromium.
+func (s *Scenario) RequiresChromiumEngine() bool {
+	return s.Browser.RequiresChromium || s.NeedsPopupTarget()
+}
+
 func (s *Scenario) Fingerprint(flows map[string]*Flow) string {
 	var parts []string
 	parts = append(parts, "cap:"+norm(s.Covers.Capability))
@@ -620,6 +799,9 @@ func majorAction(st Step) string {
 		return fmt.Sprintf("assert_request:%s:%s:%d", norm(r.Method), norm(r.URLContains), r.Status)
 	case "assert_attr":
 		return "assert_attr:" + SemanticTarget(&st.AssertAttr.Locator) + ":" + norm(st.AssertAttr.Attr) + "=" + norm(st.AssertAttr.Equals+st.AssertAttr.Contains)
+	case "assert_data":
+		d := st.AssertData
+		return fmt.Sprintf("assert_data:%s:%s:%s:%s", SemanticTarget(&d.UI), norm(d.API.URLContains), norm(d.API.JSONPath), norm(d.Compare))
 	case "expect_popup":
 		return "popup:" + norm(st.ExpectPopup.URLContains)
 	case "eval":

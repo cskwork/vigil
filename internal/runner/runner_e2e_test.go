@@ -29,7 +29,7 @@ const e2eEntryYAML = `
 scenario: {id: training-entry-smoke, version: 1, title: "training entry smoke"}
 covers: {capability: entry.training}
 steps:
-  - goto: /lms-web/training-entry
+  - goto: /app/training-entry
   - wait_for: {by: css, value: ".school-btn-wrap button"}
   - assert_text: {value: "초등"}
   - click: {by: text, text: "중학"}
@@ -47,11 +47,11 @@ scenario: {id: training-entry-teacher-popup, version: 1, title: "teacher entry o
 covers: {capability: entry.training.teacher}
 browser: {popup: true}
 steps:
-  - goto: /lms-web/training-entry
+  - goto: /app/training-entry
   - wait_for: {by: css, value: ".teacher-entry button"}
   - click: {by: css, value: ".teacher-entry button"}
   - expect_popup: {timeout: 20s}
-  - assert_url: {contains: "lms-web"}
+  - assert_url: {contains: "app"}
 oracle: {source: spec}
 `
 

@@ -9,15 +9,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"vigil/internal/agent"
+	"vigil/internal/approval"
+	"vigil/internal/config"
 
 	"vigil/internal/dsl"
+	"vigil/internal/explain"
 	"vigil/internal/ingest"
 	"vigil/internal/model"
 	"vigil/internal/orchestrator"
 	"vigil/internal/scheduler"
+	"vigil/internal/store"
 	"vigil/internal/ui"
 )
 
@@ -331,13 +336,13 @@ func (a *app) cmdScan(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	a.printf("%-28s %-9s %-24s %-8s %s\n", "FEATURE", "SHA", "READINESS", "HANDLED", "SUMMARY")
+	a.printf("%-28s %-5s %-14s %-9s %-24s %-8s %s\n", "FEATURE", "KIND", "REF", "SHA", "READINESS", "HANDLED", "SUMMARY")
 	for _, f := range feats {
 		handled := "no"
 		if f.LastHandledSHA == f.LatestShippedSHA {
 			handled = "yes"
 		}
-		a.printf("%-28s %-9s %-24s %-8s %s\n", f.ID, short(f.LatestShippedSHA), f.Readiness, handled, trunc(f.Summary, 60))
+		a.printf("%-28s %-5s %-14s %-9s %-24s %-8s %s\n", f.ID, featureKind(f), trunc(f.Ref, 14), short(f.LatestShippedSHA), f.Readiness, handled, trunc(f.Summary, 60))
 	}
 	c, _ := a.st.Counts(ctx, a.cfg.Project.ID)
 	if c != nil {
@@ -383,7 +388,7 @@ func (a *app) cmdImport(ctx context.Context, args []string) error {
 		if isNew {
 			created++
 		}
-		a.printf("%-28s %-9s %s  %s\n", ev.FeatureID, short(ev.ShippedSHA), ev.ShippedAt.UTC().Format(time.RFC3339), trunc(ev.Summary, 70))
+		a.printf("%-28s %-5s %-14s %-9s %s  %s\n", ev.FeatureID, orDefault(ev.Kind, model.FeatureKindShip), trunc(ev.Ref, 14), short(ev.ShippedSHA), ev.ShippedAt.UTC().Format(time.RFC3339), trunc(ev.Summary, 70))
 	}
 	a.printf("history: %d event(s) from %s (limit %d), %d new; gate/plan happens on the next `scan`/`loop`\n", len(events), in.Name(), n, created)
 	return nil
@@ -441,12 +446,31 @@ func (a *app) printJobResult(ctx context.Context, id int64) error {
 
 // ---- run ----------------------------------------------------------------------------
 
+// envRefuses checks every scenario's mutation class against the environment
+// before anything runs, so a read-only environment fails fast (exit 2).
+func (a *app) envRefuses(ctx context.Context, env config.Environment, ids []string) error {
+	if !env.ReadOnly {
+		return nil
+	}
+	for _, id := range ids {
+		m, err := a.st.GetScenario(ctx, a.cfg.Project.ID, id)
+		if err != nil {
+			return fmt.Errorf("scenario %s: %w", id, err)
+		}
+		if err := config.EnvAllows(env, string(m.Mutation)); err != nil {
+			return fmt.Errorf("--env %s: scenario %s: %w", env.Name, id, err)
+		}
+	}
+	return nil
+}
+
 func (a *app) cmdRun(ctx context.Context, args []string) (int, error) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	impacted := fs.String("impacted", "", "run scenarios impacted by this feature")
 	feature := fs.String("feature", "", "run scenarios covering this feature")
 	all := fs.Bool("all", false, "run every ACTIVE/SOAK scenario")
 	browserFlag := fs.String("browser", "", "lightpanda | chromium")
+	envFlag := fs.String("env", "", "target environment (target.environments name; default: target.default_env)")
 	pos, err := parseFlags(fs, args)
 	if err != nil {
 		return 2, err
@@ -455,6 +479,10 @@ func (a *app) cmdRun(ctx context.Context, args []string) (int, error) {
 	case "", model.BrowserLightpanda, model.BrowserChromium:
 	default:
 		return 2, fmt.Errorf("--browser must be lightpanda or chromium, got %q", *browserFlag)
+	}
+	env, err := a.cfg.Env(*envFlag)
+	if err != nil {
+		return 2, fmt.Errorf("--env: %w", err)
 	}
 	var ids []string
 	switch {
@@ -488,19 +516,22 @@ func (a *app) cmdRun(ctx context.Context, args []string) (int, error) {
 			return 1, fmt.Errorf("%q is neither a scenario nor a feature", pos[0])
 		}
 	default:
-		return 2, errors.New("usage: vigil run <scenario|feature> | --feature <f> | --impacted <f> | --all  [--browser lightpanda|chromium]")
+		return 2, errors.New("usage: vigil run <scenario|feature> | --feature <f> | --impacted <f> | --all  [--browser lightpanda|chromium] [--env <name>]")
 	}
 	if len(ids) == 0 {
 		a.printf("nothing to run\n")
 		return 0, nil
 	}
 	sort.Strings(ids)
+	if err := a.envRefuses(ctx, env, ids); err != nil {
+		return 2, err
+	}
 	run := a.buildRunner()
 	orch := a.buildOrchestrator(run, nil)
 	s := a.buildScheduler(orch, run, false, false)
 	failed := 0
 	for _, id := range ids {
-		r, err := s.RunScenarioNow(ctx, id, model.Browser(*browserFlag))
+		r, err := s.RunScenarioNowEnv(ctx, id, model.Browser(*browserFlag), env.Name)
 		if err != nil {
 			failed++
 			a.printf("%-44s ERROR  %v\n", id, err)
@@ -514,9 +545,21 @@ func (a *app) cmdRun(ctx context.Context, args []string) (int, error) {
 			}
 			failed++
 		}
-		a.printf("%-44s %s %-22s %-10s %6dms a%d %s\n", id, mark, r.Outcome, r.Browser, r.DurationMs, r.Attempt, r.EvidenceDir)
-		if r.Outcome != model.OutcomePass && r.Error != "" {
-			a.printf("%-44s        step %d %s: expected=%q actual=%q %s\n", "", r.FailedStep, r.FailedAction, trunc(r.Expected, 60), trunc(r.Actual, 60), trunc(r.Error, 120))
+		a.printf("%-44s %s %-22s %-10s env=%s %6dms a%d %s\n", id, mark, r.Outcome, r.Browser, r.Environment, r.DurationMs, r.Attempt, r.EvidenceDir)
+		if r.Outcome != model.OutcomePass {
+			// One sentence on screen, the raw text in the log and behind --json.
+			raw := fmt.Sprintf("step %d %s: expected=%q actual=%q %s", r.FailedStep, r.FailedAction, trunc(r.Expected, 60), trunc(r.Actual, 60), trunc(r.Error, 120))
+			if r.Error != "" {
+				a.log.Printf("run %s: %s", id, raw)
+			}
+			switch {
+			case a.jsonOut && r.Error != "":
+				a.printf("%-44s        %s\n", "", raw)
+			default:
+				if c := explain.ForRun(r, nil); !c.Empty() {
+					a.printf("%-44s        %s\n", "", c.Headline)
+				}
+			}
 		}
 		if ctx.Err() != nil {
 			break
@@ -583,6 +626,28 @@ func (s loopRequestSubmitter) SubmitUserRequest(ctx context.Context, situation s
 	return featureID, jobID, nil
 }
 
+// loopScriptActions backs the dashboard's ▶ 실행 / ✔ 승인 / ✖ 반려 buttons when
+// the scheduler runs in this process.
+type loopScriptActions struct {
+	svc   *approval.Service
+	sched *scheduler.Scheduler
+}
+
+func (l loopScriptActions) CanRun() bool { return true }
+
+func (l loopScriptActions) RunScript(ctx context.Context, sc *model.Scenario, env config.Environment, browser model.Browser) (int64, error) {
+	id, _, err := l.sched.EnqueueScenarioEnv(ctx, sc, model.PriorityUserRequest, browser, "", env.Name)
+	return id, err
+}
+
+func (l loopScriptActions) ApproveScript(ctx context.Context, id string) (approval.Receipt, error) {
+	return l.svc.Approve(ctx, id, approval.Options{})
+}
+
+func (l loopScriptActions) RejectScript(ctx context.Context, id string) (approval.Receipt, error) {
+	return l.svc.Reject(ctx, id)
+}
+
 func (a *app) cmdLoop(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("loop", flag.ContinueOnError)
 	uiAddr := fs.String("ui", "", "serve the read-only live view on this address (e.g. 127.0.0.1:8787)")
@@ -605,6 +670,7 @@ func (a *app) cmdLoop(ctx context.Context, args []string) error {
 		if ag != nil {
 			srv.SetRequestSubmitter(loopRequestSubmitter{orch: orch, sched: s})
 		}
+		srv.SetScriptActions(loopScriptActions{svc: a.approvalService(), sched: s})
 		go func() {
 			if err := srv.ListenAndServe(ctx, *uiAddr); err != nil {
 				a.log.Printf("ui: %v", err)
@@ -614,7 +680,7 @@ func (a *app) cmdLoop(ctx context.Context, args []string) error {
 	}
 	a.log.Printf("loop: config=%s state=%s log=%s", a.cfgPath, a.cfg.Abs(a.cfg.State.Path), filepath.Join(a.stateDir(), "vigil.log"))
 	a.log.Printf("loop: target=%s hosts=%v discovery=%s/%s readiness=%s primary=%s", a.cfg.Target.BaseURL, a.cfg.Target.AllowedHosts,
-		a.cfg.Discovery.Adapter, a.cfg.Discovery.Branch, a.cfg.Deployment.Readiness.Strategy, a.cfg.Browser.Primary)
+		strings.Join(a.cfg.AdapterNames(), ","), a.cfg.Discovery.Branch, a.cfg.Deployment.Readiness.Strategy, a.cfg.Browser.Primary)
 	return s.Loop(ctx)
 }
 
@@ -623,11 +689,12 @@ func (a *app) cmdLoop(ctx context.Context, args []string) error {
 func (a *app) cmdServe(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	addr := fs.String("addr", "127.0.0.1:8787", "listen address")
-	devDir := fs.String("dev-ui", "", "serve index.html/scripts.html/theme.css from this directory (edit without restart)")
+	devDir := fs.String("dev-ui", "", "serve the dashboard pages, theme.css and app.js from this directory (edit without restart)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	srv := ui.New(a.cfg, a.st, a.cfg.Abs(a.cfg.Evidence.Dir))
+	srv.SetScriptActions(ui.StoreScriptActions{Svc: a.approvalService()}) // approve/reject only; run needs `loop --ui`
 	if *devDir != "" {
 		srv.SetDevDir(a.cfg.Abs(*devDir))
 	}
@@ -684,13 +751,13 @@ func (a *app) cmdStatus(ctx context.Context) error {
 		float64(doc.Budget["browser"])/60000, float64(doc.Budget["chromium"])/60000, doc.Budget["agent"])
 	a.printf("open incidents: %d   features: %d\n\n", c.Incidents, c.Features)
 	if len(doc.Features) > 0 {
-		a.printf("%-28s %-9s %-24s %-20s %s\n", "FEATURE", "SHA", "READINESS", "SHIPPED", "HANDLED")
+		a.printf("%-28s %-5s %-14s %-9s %-24s %-20s %s\n", "FEATURE", "KIND", "REF", "SHA", "READINESS", "SHIPPED", "HANDLED")
 		for _, f := range doc.Features {
 			handled := "no"
 			if f.LastHandledSHA == f.LatestShippedSHA {
 				handled = "yes"
 			}
-			a.printf("%-28s %-9s %-24s %-20s %s\n", f.ID, short(f.LatestShippedSHA), f.Readiness, f.ShippedAt.UTC().Format("2006-01-02 15:04Z"), handled)
+			a.printf("%-28s %-5s %-14s %-9s %-24s %-20s %s\n", f.ID, featureKind(f), trunc(f.Ref, 14), short(f.LatestShippedSHA), f.Readiness, f.ShippedAt.UTC().Format("2006-01-02 15:04Z"), handled)
 		}
 		a.printf("\n")
 	}
@@ -716,12 +783,34 @@ func (a *app) cmdStatus(ctx context.Context) error {
 		a.printf("%-44s %-22s %-10s %-20s %s\n", "RECENT RUN", "OUTCOME", "BROWSER", "FINISHED", "DURATION")
 		for _, r := range doc.RecentRuns {
 			a.printf("%-44s %-22s %-10s %-20s %dms\n", r.ScenarioID, r.Outcome, r.Browser, r.FinishedAt.UTC().Format("2006-01-02 15:04:05Z"), r.DurationMs)
+			// One plain sentence under a failing run; the raw fields stay in --json.
+			if c := explain.ForRun(r, nil); !c.Empty() {
+				a.printf("%-44s %s\n", "", c.Headline)
+			}
 		}
+	}
+	incidentRuns := map[int64]*model.Run{}
+	if ids := incidentRunIDs(doc.OpenIncidents); len(ids) > 0 {
+		incidentRuns, _ = a.st.RunsByID(ctx, p, ids)
 	}
 	for _, in := range doc.OpenIncidents {
 		a.printf("incident #%d %s %s: %s (%s)\n", in.ID, in.Kind, in.ScenarioID, in.Title, in.MarkdownPath)
+		if c := explain.ForIncident(in, incidentRuns[in.RunID], nil); !c.Empty() {
+			a.printf("            원인: %s\n", c.Headline)
+		}
 	}
 	return nil
+}
+
+// incidentRunIDs collects the run ids an incident list refers to.
+func incidentRunIDs(list []*model.Incident) []int64 {
+	var ids []int64
+	for _, in := range list {
+		if in.RunID != 0 {
+			ids = append(ids, in.RunID)
+		}
+	}
+	return ids
 }
 
 type coverageRow struct {
@@ -850,49 +939,103 @@ func (a *app) cmdIncidents(ctx context.Context, args []string) error {
 	return nil
 }
 
+// cmdFindings lists data-analyst findings (OPEN by default) or resolves one:
+// vigil findings [--all] [--limit N] | vigil findings resolve <id>
+func (a *app) cmdFindings(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "resolve" {
+		if len(args) != 2 {
+			return fmt.Errorf("usage: vigil findings resolve <id>")
+		}
+		id, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil || id <= 0 {
+			return fmt.Errorf("findings resolve: %q is not a finding id", args[1])
+		}
+		if err := a.st.ResolveFinding(ctx, a.cfg.Project.ID, id); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("finding %d: not found or already resolved", id)
+			}
+			return err
+		}
+		if a.jsonOut {
+			return a.printJSON(map[string]any{"id": id, "state": "RESOLVED"})
+		}
+		a.printf("finding %d: RESOLVED\n", id)
+		return nil
+	}
+	fs := flag.NewFlagSet("findings", flag.ContinueOnError)
+	all := fs.Bool("all", false, "include resolved findings")
+	limit := fs.Int("limit", 50, "max rows")
+	if _, err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	list, err := a.st.ListFindings(ctx, a.cfg.Project.ID, !*all, *limit)
+	if err != nil {
+		return err
+	}
+	if a.jsonOut {
+		if list == nil {
+			list = []*model.Finding{}
+		}
+		return a.printJSON(list)
+	}
+	if len(list) == 0 {
+		a.printf("no findings\n")
+		return nil
+	}
+	a.printf("%-4s %-9s %-14s %-32s %-20s %s\n", "ID", "STATE", "KIND", "SCENARIO/FEATURE", "CREATED", "WHERE")
+	for _, f := range list {
+		a.printf("%-4d %-9s %-14s %-32s %-20s %s\n", f.ID, f.State, f.Kind, scenarioOrFeature(f), f.CreatedAt.UTC().Format("2006-01-02 15:04Z"), f.Where)
+		a.printf("     expected: %s\n     actual:   %s\n", f.Expected, f.Actual)
+		if f.Evidence != "" {
+			a.printf("     evidence: %s\n", f.Evidence)
+		}
+	}
+	return nil
+}
+
 // ---- approve / reject / list / show ---------------------------------------------------
 
+func (a *app) approvalService() *approval.Service { return approval.New(a.cfg, a.st, a.log) }
+
 func (a *app) cmdApprove(ctx context.Context, args []string) error {
-	if len(args) < 1 {
-		return errors.New("usage: vigil approve <scenario>")
-	}
-	p := a.cfg.Project.ID
-	m, err := a.st.GetScenario(ctx, p, args[0])
+	fs := flag.NewFlagSet("approve", flag.ContinueOnError)
+	soak := fs.Bool("soak", false, "force the SOAK path (also for PENDING_APPROVAL scripts) instead of daily ACTIVE")
+	pos, err := parseFlags(fs, args)
 	if err != nil {
-		return fmt.Errorf("scenario %s: %w", args[0], err)
-	}
-	switch m.State {
-	case model.StateNeedsReview, model.StateCandidate, model.StateQuarantined, model.StateRejected:
-	default:
-		return fmt.Errorf("scenario %s is %s; only NEEDS_REVIEW/CANDIDATE/QUARANTINED/REJECTED can be approved", m.ID, m.State)
-	}
-	if err := a.st.SetScenarioState(ctx, p, m.ID, model.StateSoak); err != nil {
 		return err
 	}
-	if _, err := a.st.DB().ExecContext(ctx, `UPDATE scenarios SET soak_passes=0, consecutive_failures=0, updated_at=? WHERE project_id=? AND id=?`, time.Now().UTC().UnixMilli(), p, m.ID); err != nil {
+	if len(pos) < 1 {
+		return errors.New("usage: vigil approve [--soak] <scenario>")
+	}
+	r, err := a.approvalService().Approve(ctx, pos[0], approval.Options{Soak: *soak})
+	if err != nil {
 		return err
 	}
-	if err := a.st.SetScenarioNextDue(ctx, p, m.ID, time.Now().UTC()); err != nil {
-		return err
-	}
-	a.printf("%s: %s → SOAK (soak counter reset, due now; %d clean pass(es) promote it to ACTIVE)\n", m.ID, m.State, a.cfg.Policy.SoakPasses)
-	return nil
+	return a.printReceipt(r)
 }
 
 func (a *app) cmdReject(ctx context.Context, args []string) error {
 	if len(args) < 1 {
 		return errors.New("usage: vigil reject <scenario>")
 	}
-	p := a.cfg.Project.ID
-	m, err := a.st.GetScenario(ctx, p, args[0])
+	r, err := a.approvalService().Reject(ctx, args[0])
 	if err != nil {
-		return fmt.Errorf("scenario %s: %w", args[0], err)
-	}
-	if err := a.st.SetScenarioState(ctx, p, m.ID, model.StateRejected); err != nil {
 		return err
 	}
-	_ = a.st.ResolveIncidents(ctx, p, model.IncidentAppRegression, m.ID)
-	a.printf("%s: %s → REJECTED\n", m.ID, m.State)
+	return a.printReceipt(r)
+}
+
+// printReceipt prints what happened to the script and, when the source issue
+// was commented, the Jira result (json mode emits the receipt as an object).
+func (a *app) printReceipt(r approval.Receipt) error {
+	if a.jsonOut {
+		out := map[string]any{"id": r.ID, "from": r.From, "state": r.To, "cadence": r.Cadence, "next_due_at": r.NextDueAt}
+		if r.Jira != nil {
+			out["jira"] = r.Jira
+		}
+		return a.printJSON(out)
+	}
+	a.printf("%s\n", r.Message(a.cfg.DailyLocation()))
 	return nil
 }
 
@@ -942,6 +1085,9 @@ func (a *app) cmdShow(ctx context.Context, args []string) error {
 	}
 	a.printf("%s  state=%s class=%s mutation=%s v%d origin=%s oracle=%s/%s@%s\n", m.ID, m.State, m.Class, m.Mutation, v.Version, m.Origin, m.OracleSource, m.OracleFeature, short(m.OracleSHA))
 	a.printf("locks=%v soak=%d/%d fails=%d last=%s next_due=%s\n", m.Locks, m.SoakPasses, m.SoakTarget, m.ConsecutiveFailures, m.LastOutcome, fmtTime(m.NextDueAt))
+	if m.SourceRef != "" || m.State == model.StatePendingApproval {
+		a.printf("source=%s/%s reproduction=%s approved_at=%s\n", orDefault(m.SourceKind, "-"), orDefault(m.SourceRef, "-"), orDefault(m.Reproduction, "-"), fmtTime(m.ApprovedAt))
+	}
 	a.printf("links: %s\n", fmtLinks(links))
 	if met != nil {
 		a.printf("metrics: runs=%d pass=%d fail=%d flake=%d regressions=%d avg=%dms last_verified=%s\n", met.Runs, met.Passes, met.Failures, met.Flakes, met.RegressionsCaught, met.MedianDurationMs, fmtTime(met.LastVerifiedAt))
@@ -1038,6 +1184,18 @@ func yamlFiles(dir string) []string {
 }
 
 // ---- formatting helpers ---------------------------------------------------------------
+
+// featureKind renders the feature kind column ("ship" for rows written before the column existed).
+func featureKind(f *model.Feature) string {
+	return orDefault(f.Kind, model.FeatureKindShip)
+}
+
+func scenarioOrFeature(f *model.Finding) string {
+	if f.ScenarioID != "" {
+		return f.ScenarioID
+	}
+	return f.FeatureID
+}
 
 func short(sha string) string {
 	if len(sha) > 7 {

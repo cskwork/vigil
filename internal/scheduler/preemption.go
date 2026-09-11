@@ -97,9 +97,9 @@ func (s *Scheduler) nextPersistedUserRequest(ctx context.Context) (int64, bool) 
 	var id int64
 	err := s.st.DB().QueryRowContext(ctx, `SELECT id FROM jobs
 		WHERE project_id=? AND state='READY' AND scheduled_at<=? AND priority>=?
-		AND kind IN (?,?,?) ORDER BY priority DESC, scheduled_at, id LIMIT 1`,
+		AND kind IN (?,?,?,?) ORDER BY priority DESC, scheduled_at, id LIMIT 1`,
 		s.project(), s.Now().UnixMilli(), model.PriorityUserRequest,
-		string(model.JobAgentDiscover), string(model.JobAgentVerify), string(model.JobAgentRepair),
+		string(model.JobAgentDiscover), string(model.JobAgentVerify), string(model.JobAgentRepair), string(model.JobAgentReproduce),
 	).Scan(&id)
 	return id, err == nil
 }

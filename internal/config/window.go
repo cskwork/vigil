@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -73,15 +74,25 @@ func ParseWeekday(s string) (int, bool) {
 	return 0, false
 }
 
+// locations memoizes time.LoadLocation, which reads and parses the zoneinfo
+// file on every call. Allows/NextChange are evaluated on every scheduler tick
+// and every dashboard poll, so an uncached lookup dominated their cost.
+var locations sync.Map // tz name -> *time.Location
+
 // Location resolves TZ; an empty or unknown zone falls back to machine local.
 func (a ActiveHours) Location() *time.Location {
 	if a.TZ == "" || strings.EqualFold(a.TZ, "local") {
 		return time.Local
 	}
-	if loc, err := time.LoadLocation(a.TZ); err == nil {
-		return loc
+	if v, ok := locations.Load(a.TZ); ok {
+		return v.(*time.Location)
 	}
-	return time.Local
+	loc, err := time.LoadLocation(a.TZ)
+	if err != nil {
+		loc = time.Local
+	}
+	locations.Store(a.TZ, loc)
+	return loc
 }
 
 // Validate reports why a window would be ignored. Callers that accept user input
@@ -154,18 +165,34 @@ func (a ActiveHours) hasDay(d int) bool {
 	return false
 }
 
-// NextChange returns the next instant at which Allows flips, scanning at minute
-// resolution for at most 8 days. The zero time means "never changes".
+// NextChange returns the next instant at which Allows flips, looking at most 8
+// days ahead. The zero time means "never changes".
+//
+// Allows is piecewise constant and can only flip at a window boundary (the
+// `from` or `to` clock time on some day), so it is enough to test those
+// boundaries in order instead of scanning every minute.
 func (a ActiveHours) NextChange(t time.Time) time.Time {
 	if !a.Enabled {
 		return time.Time{}
 	}
+	from, err1 := parseHM(a.From)
+	to, err2 := parseHM(a.To)
+	if err1 != nil || err2 != nil || from == to || len(a.Days) == 0 {
+		return time.Time{} // Allows fails open on these; nothing ever flips
+	}
+	loc := a.Location()
 	now := a.Allows(t)
-	cur := t.In(a.Location()).Truncate(time.Minute)
-	for i := 1; i <= 8*24*60; i++ {
-		at := cur.Add(time.Duration(i) * time.Minute)
-		if a.Allows(at) != now {
-			return at
+	local := t.In(loc)
+	y, m, d := local.Date()
+	for day := 0; day <= 8; day++ {
+		for _, hm := range [2]int{min(from, to), max(from, to)} { // clock order within the day
+			at := time.Date(y, m, d+day, hm/60, hm%60, 0, 0, loc)
+			if !at.After(local) {
+				continue
+			}
+			if a.Allows(at) != now {
+				return at
+			}
 		}
 	}
 	return time.Time{}
@@ -182,6 +209,26 @@ func (a ActiveHours) String() string {
 		}
 	}
 	return fmt.Sprintf("%s %s-%s %s", strings.Join(days, ","), a.From, a.To, a.Location())
+}
+
+// NextDailyAt returns the first occurrence of the wall-clock time hhmm ("HH:MM"
+// in zone tz; "" = machine local) strictly after now. A slot earlier than or
+// equal to now's clock rolls over to tomorrow, so a run finishing at 09:00:30
+// is next due at 09:00 the following day. It fails open on a malformed hhmm
+// (09:00) for the same reason ActiveHours.Allows does; Validate rejects it.
+func NextDailyAt(now time.Time, hhmm, tz string) time.Time {
+	hm, err := parseHM(hhmm)
+	if err != nil {
+		hm = 9 * 60
+	}
+	loc := ActiveHours{TZ: tz}.Location()
+	local := now.In(loc)
+	y, m, d := local.Date()
+	at := time.Date(y, m, d, hm/60, hm%60, 0, 0, loc)
+	if !at.After(local) {
+		at = time.Date(y, m, d+1, hm/60, hm%60, 0, 0, loc)
+	}
+	return at
 }
 
 func parseHM(s string) (int, error) {

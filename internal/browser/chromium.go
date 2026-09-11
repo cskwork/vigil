@@ -89,6 +89,15 @@ func (c *chromium) Ensure(ctx context.Context) (*Endpoint, error) {
 		"--disable-popup-blocking",
 		"--mute-audio",
 		"--window-size=1280,900",
+		// Memory: one run drives one tab at a time, so a handful of renderers
+		// is plenty, and none of the background services earn their keep here.
+		"--renderer-process-limit=4",
+		"--disable-component-update",
+		"--disable-default-apps",
+		"--disable-breakpad",
+		"--no-service-autorun",
+		"--metrics-recording-only",
+		"--disable-features=Translate,MediaRouter,OptimizationHints,InterestFeedContentSuggestions",
 	}
 	if c.headless {
 		args = append(args, "--headless=new", "--hide-scrollbars")
@@ -113,6 +122,12 @@ func (c *chromium) Ensure(ctx context.Context) (*Endpoint, error) {
 	}
 	c.wsURL = v.WebSocketDebugURL
 	return &Endpoint{Kind: model.BrowserChromium, WebSocketURL: c.wsURL}, nil
+}
+
+func (c *chromium) Running() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cmd != nil
 }
 
 // Stop kills the launched process and removes its temporary profile.

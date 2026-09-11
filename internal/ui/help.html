@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ko" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>도움말, QA 현황판</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="/ui/theme.css">
+</head>
+<body>
+<a class="skiplink" href="#main">본문으로 건너뛰기</a>
+<div class="shell">
+  <nav class="rail" aria-label="주 메뉴">
+    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <a href="/">할 일</a>
+    <a href="/results">검증 결과</a>
+    <a href="/scripts">검사 스크립트</a>
+    <a href="/activity">시스템 활동</a>
+    <a href="/help" class="active" aria-current="page">도움말</a>
+    <div class="rail-foot">
+      <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
+      <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
+      <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
+    </div>
+  </nav>
+  <div class="content">
+    <header class="topbar">
+      <div class="crumbs">QA 현황판 &rsaquo; <b>도움말</b></div>
+    </header>
+    <main id="main" tabindex="-1">
+      <p class="purpose">화면에 나오는 말이 무슨 뜻인지, 무엇을 하면 되는지 정리했습니다.</p>
+
+      <section class="panel">
+        <header><h2>vigil이 하는 일</h2><p>사람이 시키지 않아도 이 네 단계가 계속 돕니다.</p></header>
+        <div class="body">
+          <ol class="steps4 wide">
+            <li><b>1. 신호 감지</b><span>새 커밋, Jira 이슈, 운영 로그에서 확인할 거리를 찾습니다.</span></li>
+            <li><b>2. AI가 재현하고 검사 작성</b><span>AI가 브라우저로 직접 눌러 증상을 재현하고 검사 절차를 만듭니다.</span></li>
+            <li><b>3. 사람이 확인하고 승인</b><span>사람이 증거를 보고 승인해야 정식 검사가 됩니다. 승인 전에는 아무것도 자동으로 돌지 않습니다.</span></li>
+            <li><b>4. 매일 자동 실행</b><span>승인된 검사는 매일 정해진 시각과 배포 직후에 실행되고, 실패하면 할 일 화면에 올라옵니다.</span></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header><h2>용어표</h2><p>왼쪽이 화면에 보이는 말, 오른쪽이 내가 할 일입니다.</p></header>
+        <div class="body">
+          <h3 class="ghead">검사 스크립트의 상태</h3>
+          <table class="gloss"><caption class="sr-only">검사 스크립트 상태 용어</caption>
+            <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
+            <tbody id="tState"></tbody></table>
+
+          <h3 class="ghead">판정 근거 (오라클)</h3>
+          <p class="sub">무엇을 기준으로 옳고 그름을 정했는지입니다. 근거가 약하면 실패해도 결함이라 단정할 수 없습니다.</p>
+          <table class="gloss"><caption class="sr-only">판정 근거 용어</caption>
+            <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
+            <tbody id="tOracle"></tbody></table>
+
+          <h3 class="ghead">검사 결과</h3>
+          <table class="gloss"><caption class="sr-only">검사 결과 용어</caption>
+            <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
+            <tbody id="tOutcome"></tbody></table>
+
+          <h3 class="ghead">재현 판정</h3>
+          <p class="sub">이슈에 적힌 증상이 실제로 다시 나타났는지에 대한 판정입니다.</p>
+          <table class="gloss"><caption class="sr-only">재현 판정 용어</caption>
+            <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
+            <tbody id="tRepro"></tbody></table>
+
+          <h3 class="ghead">그 밖의 말</h3>
+          <table class="gloss"><caption class="sr-only">그 밖의 용어</caption>
+            <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
+            <tbody id="tMisc"></tbody></table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header><h2>자주 하는 작업</h2><p>화면에서 하는 방법과, 터미널에서 같은 일을 하는 명령입니다.</p></header>
+        <div class="body">
+          <table class="gloss"><caption class="sr-only">자주 하는 작업과 명령</caption>
+            <thead><tr><th scope="col">하고 싶은 일</th><th scope="col">화면에서</th><th scope="col">터미널에서</th></tr></thead>
+            <tbody id="tTask"></tbody></table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header><h2>더 읽을거리</h2><p>설정과 동작 규칙은 저장소 README에 있습니다.</p></header>
+        <div class="body">
+          <ul class="links">
+            <li><a href="https://github.com/cskwork/vigil#readme" target="_blank" rel="noopener">README</a> — 전체 소개와 설정 표</li>
+            <li><a href="https://github.com/cskwork/vigil#approval" target="_blank" rel="noopener">승인 절차</a> — 승인 대기가 생기는 조건과 승인 뒤 일어나는 일</li>
+            <li><a href="https://github.com/cskwork/vigil#environments" target="_blank" rel="noopener">환경 설정</a> — 검사 대상 환경과 읽기 전용 규칙</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+// The rows reuse the labels and sentences the other pages show (app.js), so the
+// glossary cannot drift from the screens it explains.
+const row = (label, tone, code, mean, todo) =>
+  `<tr><td>${st({ x: [label, tone] }, 'x')}</td><td class="mono">${esc(code)}</td><td>${esc(mean)}</td><td>${esc(todo)}</td></tr>`;
+const fromMap = (map, code, todo) => row((map[code] || [code])[0], (map[code] || [code, 'muted'])[1], code, GLOSS[code] || '', todo);
+
+$('tState').innerHTML = [
+  ['ACTIVE', '없습니다. 실패하면 할 일 화면에 올라옵니다.'],
+  ['SOAK', '없습니다. 통과 횟수가 차기를 기다립니다.'],
+  ['PENDING_APPROVAL', '검사 스크립트 화면에서 증거를 보고 승인하거나 반려합니다.'],
+  ['CANDIDATE', '없습니다. 자동 검증 결과를 기다립니다.'],
+  ['NEEDS_REVIEW', '증거를 보고 승인하거나 반려합니다.'],
+  ['QUARANTINED', '검사 절차를 고치고 다시 승인합니다.'],
+  ['DUPLICATE', '없습니다.'],
+  ['EPHEMERAL', '없습니다.'],
+  ['REJECTED', '다시 쓰려면 승인하면 됩니다.'],
+  ['MERGED', '없습니다.'],
+  ['SUPERSEDED', '없습니다.'],
+  ['RETIRED', '없습니다.'],
+].map(([k, todo]) => fromMap(STATE, k, todo)).join('');
+
+$('tOracle').innerHTML = [
+  ['spec', '명세', 'ok', '실패하면 결함으로 보고 개발팀에 전달합니다.'],
+  ['contract', '코드 계약', 'ok', '실패하면 결함으로 보고 개발팀에 전달합니다.'],
+  ['approved_qa', '승인된 검사', 'info', '실패하면 검사 절차가 낡았는지 함께 확인합니다.'],
+  ['observation', '관찰만', 'muted', '실패해도 바로 결함으로 보지 말고 사람이 판단합니다.'],
+].map(([k, label, tone, todo]) => row(label, tone, k, GLOSS[k], todo)).join('');
+
+$('tOutcome').innerHTML = [
+  ['PASS', '없습니다.'],
+  ['APP_FAILURE', '증거를 확인하고 개발팀에 전달합니다.'],
+  ['QA_FLAKE', '자주 반복되면 검사 절차를 손봅니다.'],
+  ['SCRIPT_DRIFT', '검사 절차를 새 화면에 맞게 고칩니다.'],
+  ['LIGHTPANDA_INCOMPATIBLE', '없습니다. Chromium 재확인 결과를 봅니다.'],
+  ['BROWSER_AMBIGUOUS', '두 브라우저의 증거를 비교해 판단합니다.'],
+  ['AUTH_FAILURE', '검사 계정과 토큰을 확인합니다.'],
+  ['DATA_FAILURE', '검사에 쓰는 데이터가 남아 있는지 확인합니다.'],
+  ['ENV_FAILURE', '네트워크와 접속 경로를 확인합니다. 서비스 결함이 아닙니다.'],
+  ['DEPLOYMENT_NOT_READY', '없습니다. 배포가 올라오면 자동으로 실행됩니다.'],
+  ['ORACLE_UNKNOWN', '무엇이 옳은 동작인지 정해 주고 다시 승인합니다.'],
+  ['NEEDS_REVIEW', '증거를 보고 승인하거나 반려합니다.'],
+].map(([k, todo]) => fromMap(OUTCOME, k, todo)).join('');
+
+$('tRepro').innerHTML = [
+  ['confirmed', '재현됨', 'bad', '증상이 실제로 나타났습니다. 승인하고 개발팀에 전달합니다.'],
+  ['disputed', '판정 불일치', 'warn', '실행 결과와 AI 설명이 다릅니다. 증거를 직접 보고 승인 여부를 정합니다.'],
+  ['unconfirmed', '재현 안 됨', 'ok', '증상이 없습니다. 그래도 회귀 방지용으로 승인할 수 있습니다.'],
+].map(([k, label, tone, todo]) => row(label, tone, k, GLOSS[k], todo)).join('');
+
+$('tMisc').innerHTML = [
+  ['환경', 'environment', '검사를 실행한 대상입니다. 스테이징과 운영처럼 주소와 규칙이 다릅니다.', '운영에서 실행할 때는 화면을 바꾸지 않는 검사만 돌아갑니다.'],
+  ['배포 표시', 'deploy marker', GLOSS.marker, '결과가 어느 배포의 것인지 확인할 때 봅니다.'],
+  ['발견 사항', 'finding', GLOSS.finding, '내용을 확인하고 처리했으면 닫습니다.'],
+  ['공유 자원', 'lock', '같은 계정이나 데이터를 쓰는 검사끼리 겹치지 않게 잡아 두는 표시입니다.', '없습니다.'],
+  ['지문', 'fingerprint', '검사 절차의 요약값입니다. 같은 검사가 두 번 만들어지는 것을 막습니다.', '없습니다.'],
+].map(([label, code, mean, todo]) => `<tr><td>${esc(label)}</td><td class="mono">${esc(code)}</td><td>${esc(mean)}</td><td>${esc(todo)}</td></tr>`).join('');
+
+$('tTask').innerHTML = [
+  ['검사 승인하기', '<a href="/scripts?state=PENDING_APPROVAL">검사 스크립트</a> 화면에서 <b>✔ 승인</b>', 'vigil approve &lt;검사 이름&gt;'],
+  ['운영 환경에서 실행하기', '검사 스크립트 화면에서 <b>▶ 실행</b>, 환경에서 운영 선택', 'vigil run &lt;검사 이름&gt; --env prod'],
+  ['Playwright로 내보내기', '없습니다. 터미널에서만 합니다.', 'vigil export &lt;검사 이름&gt;'],
+  ['티켓 증상 재현하기', '없습니다. 터미널에서만 합니다.', 'vigil reproduce &lt;이슈 키&gt;'],
+  ['발견 사항 닫기', '없습니다. 터미널에서만 합니다.', 'vigil findings resolve &lt;번호&gt;'],
+  ['검사 반려하기', '검사 스크립트 화면에서 <b>✖ 반려</b>', 'vigil reject &lt;검사 이름&gt;'],
+].map(([what, ui, cli]) => `<tr><td class="t">${esc(what)}</td><td>${ui}</td><td><span class="mono">${cli}</span></td></tr>`).join('');
+</script>
+</body>
+</html>

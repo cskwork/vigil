@@ -78,14 +78,14 @@ func TestRedactorHidesPersonaValues(t *testing.T) {
 
 func TestRedactorHidesCredentialQueryParams(t *testing.T) {
 	r := newRedactor(nil)
-	in := "https://h.example/auth?lmsToken=eyJabc.def&token=f511&access_id=yx4r&user_id=98292&api_domain=https%3A%2F%2Fx&Authorization=Bearer1&authorName=Kim&auth=zz9 next"
+	in := "https://h.example/auth?sessionToken=eyJabc.def&token=f511&access_id=yx4r&user_id=12345&api_domain=https%3A%2F%2Fx&Authorization=Bearer1&authorName=Kim&auth=zz9 next"
 	out := r.Redact(in)
 	for _, leaked := range []string{"eyJabc.def", "f511", "yx4r", "Bearer1", "auth=zz9"} {
 		if strings.Contains(out, leaked) {
 			t.Fatalf("leaked %q in %q", leaked, out)
 		}
 	}
-	for _, kept := range []string{"user_id=98292", "api_domain=https%3A%2F%2Fx", "lmsToken=[REDACTED]&token=[REDACTED]", "authorName=Kim", " next"} {
+	for _, kept := range []string{"user_id=12345", "api_domain=https%3A%2F%2Fx", "sessionToken=[REDACTED]&token=[REDACTED]", "authorName=Kim", " next"} {
 		if !strings.Contains(out, kept) {
 			t.Fatalf("expected %q kept in %q", kept, out)
 		}
@@ -94,7 +94,7 @@ func TestRedactorHidesCredentialQueryParams(t *testing.T) {
 
 func TestResolveURL(t *testing.T) {
 	cases := map[string]string{
-		"/lms-web/x":              "https://h.example/lms-web/x",
+		"/app/x":                  "https://h.example/app/x",
 		"https://o.example/p?q=1": "https://o.example/p?q=1",
 		"/":                       "https://h.example/",
 		"/a?b=c#d":                "https://h.example/a?b=c#d",
@@ -162,14 +162,14 @@ func TestRunRejectsBadSpec(t *testing.T) {
 
 func TestRedactorHidesJWTAndEntityEncodedParams(t *testing.T) {
 	r := newRedactor(nil)
-	in := `<a href="/lms-web/auth?lmsToken=eyJhbGciOiJIUzI1NiJ9.eyJhY2NvdW50SUQiOiI5ODI5MjQ0MCJ9.abcdefghijk&amp;token=xyz123&amp;user_id=98292">x</a><script>var t="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";</script>`
+	in := `<a href="/app/auth?sessionToken=eyJhbGciOiJIUzI1NiJ9.eyJhY2NvdW50SUQiOiJURVNULTAwMDAifQ.abcdefghijk&amp;token=xyz123&amp;user_id=12345">x</a><script>var t="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";</script>`
 	out := r.Redact(in)
 	for _, bad := range []string{"eyJhbGciOiJIUzI1NiJ9", "xyz123"} {
 		if strings.Contains(out, bad) {
 			t.Fatalf("secret %q survived redaction: %s", bad, out)
 		}
 	}
-	if !strings.Contains(out, "user_id=98292") {
+	if !strings.Contains(out, "user_id=12345") {
 		t.Fatalf("non-credential param must survive: %s", out)
 	}
 }

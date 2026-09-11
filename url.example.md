@@ -7,3 +7,8 @@
 # Copy this file to url.md (git-ignored) and replace the URL.
 
 home | https://dev.example.com/
+
+# Several deployments (stg, prod, ...) now live in vigil.yaml under
+# `target.environments`, not here: this file stays the route list of the primary
+# target (the default environment). `vigil run <id> --env prod` switches the
+# base URL and host allowlist for that run.

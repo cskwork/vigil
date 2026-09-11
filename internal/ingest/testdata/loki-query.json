@@ -1,0 +1,160 @@
+{
+ "results": {
+  "A": {
+   "status": 200,
+   "frames": [
+    {
+     "schema": {
+      "refId": "A",
+      "meta": {
+       "custom": {
+        "frameType": "LabeledTimeValues"
+       }
+      },
+      "fields": [
+       {
+        "name": "labels",
+        "type": "other",
+        "typeInfo": {
+         "frame": "json.RawMessage"
+        }
+       },
+       {
+        "name": "Time",
+        "type": "time",
+        "typeInfo": {
+         "frame": "time.Time"
+        }
+       },
+       {
+        "name": "Line",
+        "type": "string",
+        "typeInfo": {
+         "frame": "string"
+        }
+       },
+       {
+        "name": "tsNs",
+        "type": "string",
+        "typeInfo": {
+         "frame": "string"
+        }
+       },
+       {
+        "name": "labelTypes",
+        "type": "other",
+        "typeInfo": {
+         "frame": "json.RawMessage"
+        }
+       },
+       {
+        "name": "id",
+        "type": "string",
+        "typeInfo": {
+         "frame": "string"
+        }
+       }
+      ]
+     },
+     "data": {
+      "values": [
+       [
+        {
+         "cluster": "demo",
+         "detected_level": "error",
+         "file": "api",
+         "job": "demo_fluentbit",
+         "pod_name": "api-aaaa-1"
+        },
+        {
+         "cluster": "demo",
+         "detected_level": "error",
+         "file": "api",
+         "job": "demo_fluentbit",
+         "pod_name": "api-aaaa-2"
+        },
+        {
+         "cluster": "demo",
+         "detected_level": "error",
+         "file": "api",
+         "job": "demo_fluentbit",
+         "pod_name": "api-aaaa-1"
+        },
+        {
+         "cluster": "demo",
+         "detected_level": "error",
+         "file": "api",
+         "job": "demo_fluentbit",
+         "pod_name": "api-aaaa-2"
+        },
+        {
+         "cluster": "demo",
+         "detected_level": "error",
+         "file": "api",
+         "job": "demo_fluentbit",
+         "pod_name": "api-aaaa-2"
+        },
+        {
+         "file": "web",
+         "detected_level": "error"
+        }
+       ],
+       [
+        1789040800337,
+        1789040778063,
+        1789040700000,
+        1789040650000,
+        1789040640000,
+        1789040600000
+       ],
+       [
+        "{\"ingest_time\": \"2026-09-10T20:46:40.337+09:00\", \"message\": \"09-10 20:46:40.040 [http-nio-8080-exec-7] ERROR c.d.a.l.c.OrderController -- Request failed\\njava.lang.NullPointerException: Cannot invoke \\\"Dto.getId()\\\" because \\\"dto\\\" is null\\n\\tat c.d.a.l.m.OrderMapper.toDto(OrderMapper.java:88)\"}",
+        "{\"ingest_time\": \"2026-09-10T20:46:18.063+09:00\", \"message\": \"09-10 20:46:40.040 [http-nio-8080-exec-3] ERROR c.d.a.l.c.OrderController -- Request failed\\njava.lang.NullPointerException: Cannot invoke \\\"Dto.getId()\\\" because \\\"dto\\\" is null\\n\\tat c.d.a.l.m.OrderMapper.toDto(OrderMapper.java:88)\"}",
+        "{\"ingest_time\": \"2026-09-10T20:45:00.000+09:00\", \"message\": \"09-10 20:46:40.040 [http-nio-8080-exec-9] ERROR c.d.a.l.c.OrderController -- Request failed\\njava.lang.NullPointerException: Cannot invoke \\\"Dto.getId()\\\" because \\\"dto\\\" is null\\n\\tat c.d.a.l.m.OrderMapper.toDto(OrderMapper.java:88)\"}",
+        "{\"ingest_time\": \"2026-09-10T20:44:10.000+09:00\", \"message\": \"09-10 20:46:40.040 [-Executor(13-0)] WARN  c.n.p.p.r.g.GrpcCommandService -- Failed to command stream, cause=UNAVAILABLE: Connection closed after GOAWAY\"}",
+        "{\"ingest_time\": \"2026-09-10T20:44:00.000+09:00\", \"message\": \"09-10 20:46:40.040 [-Executor(13-0)] WARN  c.n.p.p.r.g.GrpcCommandService -- Failed to command stream, cause=UNAVAILABLE: Connection closed after GOAWAY\"}",
+        "2026-09-10 20:43:20 ERROR nginx upstream timed out (110) while reading response header, request id 7f3a9c2e1b"
+       ],
+       [
+        "1789040800337000000",
+        "1789040778063000000",
+        "1789040700000000000",
+        "1789040650000000000",
+        "1789040640000000000",
+        "1789040600000000000"
+       ],
+       [
+        {
+         "file": "I"
+        },
+        {
+         "file": "I"
+        },
+        {
+         "file": "I"
+        },
+        {
+         "file": "I"
+        },
+        {
+         "file": "I"
+        },
+        {
+         "file": "I"
+        }
+       ],
+       [
+        "id-0",
+        "id-1",
+        "id-2",
+        "id-3",
+        "id-4",
+        "id-5"
+       ]
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

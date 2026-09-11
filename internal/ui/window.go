@@ -46,6 +46,10 @@ func (s *Server) scheduleWindow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.windowState(ctx))
 
 	case http.MethodPost, http.MethodPut:
+		if !hasSameOrigin(r) {
+			http.Error(w, "다른 출처에서는 검사 시간대를 바꿀 수 없습니다", http.StatusForbidden)
+			return
+		}
 		var in config.ActiveHours
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&in); err != nil {
 			http.Error(w, "본문이 올바른 JSON이 아닙니다: "+err.Error(), http.StatusBadRequest)
@@ -69,6 +73,10 @@ func (s *Server) scheduleWindow(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.windowState(ctx))
 
 	case http.MethodDelete:
+		if !hasSameOrigin(r) {
+			http.Error(w, "다른 출처에서는 검사 시간대를 바꿀 수 없습니다", http.StatusForbidden)
+			return
+		}
 		if err := s.st.SetState(ctx, config.ActiveHoursStateKey, ""); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

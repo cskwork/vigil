@@ -12,6 +12,7 @@ const (
 	TaskDiscover     = "discover_feature"       // BROWSER_AGENT_DISCOVER
 	TaskVerifyChange = "verify_changed_feature" // BROWSER_AGENT_VERIFY_CHANGE
 	TaskRepair       = "repair_script"          // BROWSER_AGENT_REPAIR
+	TaskReproduce    = "reproduce"              // REPRODUCE: replay a reported symptom (issue / log signature)
 )
 
 // Decision values the agent must return.
@@ -59,7 +60,38 @@ type Request struct {
 	// MaxContinuations: how many times the session may be resumed with a fresh tool budget
 	// before the final WRAP UP (overrides agent.continuations).
 	MaxContinuations int `yaml:"max_continuations,omitempty" json:"max_continuations,omitempty"`
+	// DomainRules is the bounded text of agent.domain_file; rendered as its own
+	// prompt section (not inside the YAML dump of the request).
+	DomainRules string `yaml:"-" json:"domain_rules,omitempty"`
 }
+
+// Finding kinds a data-analyst pass may report (PRD WI-E).
+const (
+	FindingDataMismatch  = "data_mismatch"
+	FindingDomainRule    = "domain_rule"
+	FindingDisplay       = "display"
+	FindingAccessibility = "accessibility"
+)
+
+// KnownFindingKinds lists the accepted Finding.Kind values.
+var KnownFindingKinds = map[string]bool{FindingDataMismatch: true, FindingDomainRule: true, FindingDisplay: true, FindingAccessibility: true}
+
+// Finding is one data/domain/display/accessibility observation the agent reports
+// next to its decision. Unknown kinds are normalised to display with the raw kind
+// kept in Evidence.
+type Finding struct {
+	Kind     string `yaml:"kind" json:"kind"`
+	Where    string `yaml:"where" json:"where"`
+	Expected string `yaml:"expected" json:"expected"`
+	Actual   string `yaml:"actual" json:"actual"`
+	Evidence string `yaml:"evidence,omitempty" json:"evidence,omitempty"`
+}
+
+// MaxDomainFileBytes bounds the domain rules injected into the task prompt.
+const MaxDomainFileBytes = 12 * 1024
+
+// DomainTruncatedMarker terminates domain rules cut at MaxDomainFileBytes.
+const DomainTruncatedMarker = "\n…[truncated]"
 
 // Result is what the agent must emit (a fenced ```yaml block named vigil-result).
 type Result struct {
@@ -72,6 +104,11 @@ type Result struct {
 	Observed         map[string]string `yaml:"observed,omitempty" json:"observed,omitempty"`                   // console/network/dom notes
 	VisitedURLs      []string          `yaml:"visited_urls,omitempty" json:"visited_urls,omitempty"`
 	Ephemeral        bool              `yaml:"ephemeral,omitempty" json:"ephemeral,omitempty"`
+	// Reproduction is the reproduce task's verdict on the reported symptom.
+	Reproduction *Reproduction `yaml:"reproduction,omitempty" json:"reproduction,omitempty"`
+	// Findings are data-analyst observations (value mismatches, domain-rule
+	// violations, display/accessibility defects) with their evidence.
+	Findings []Finding `yaml:"findings,omitempty" json:"findings,omitempty"`
 	// Filled by the adapter, not the model:
 	RawTranscriptPath string        `yaml:"-" json:"raw_transcript_path,omitempty"`
 	Duration          time.Duration `yaml:"-" json:"duration"`
@@ -87,7 +124,35 @@ type Result struct {
 	Sandbox   string `yaml:"-" json:"sandbox,omitempty"`
 	Attempts  int    `yaml:"-" json:"attempts,omitempty"`
 	ToolCalls int    `yaml:"-" json:"tool_calls,omitempty"`
+	// Model is the chain entry (provider/model) that produced the result; ModelAttempts
+	// lists every entry tried in order with its outcome (ok | unavailable | error | timeout | budget | no_result).
+	Model         string         `yaml:"-" json:"model,omitempty"`
+	ModelAttempts []ModelAttempt `yaml:"-" json:"model_attempts,omitempty"`
 }
+
+// Reproduction is what a reproduce task reports about the symptom it was given.
+type Reproduction struct {
+	Symptom    string `yaml:"symptom" json:"symptom"`
+	Reproduced bool   `yaml:"reproduced" json:"reproduced"`
+	AtStep     int    `yaml:"at_step,omitempty" json:"at_step,omitempty"` // 1-based step of the proposed scenario where the symptom shows
+	Note       string `yaml:"note,omitempty" json:"note,omitempty"`
+}
+
+// ModelAttempt records one spawn of the agent against one chain entry.
+type ModelAttempt struct {
+	Model   string `json:"model"`
+	Outcome string `json:"outcome"`
+}
+
+// Outcomes recorded in Result.ModelAttempts.
+const (
+	OutcomeOK          = "ok"
+	OutcomeUnavailable = "unavailable" // 429/quota/auth/5xx: entry cooled down, next entry tried
+	OutcomeError       = "error"       // non-provider failure (spawn/exit/unclassified); same entry retried with backoff
+	OutcomeTimeout     = "timeout"
+	OutcomeBudget      = "budget"
+	OutcomeNoResult    = "no_result"
+)
 
 // Adapter launches one bounded Browser Agent task.
 type Adapter interface {

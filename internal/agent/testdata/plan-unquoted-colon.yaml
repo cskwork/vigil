@@ -1,16 +1,16 @@
-assessment: All 7 scenarios are ACTIVE and passing with no consecutive failures, so there is nothing to repair, quarantine, or re-cadence. Coverage is heavily concentrated on one route (/lms-web/training-entry carries all 7 scenarios), while the declared area app.routing has zero scenarios. Beyond that, the briefing implies a larger unexplored surface: the teacher-entry scenario opens lms-web in a new tab after authentication, meaning an authenticated LMS shell (home/dashboard, navigation, student entry follow-through) almost certainly exists behind the entry page and nobody has visited it. The next gap is routing/navigation coverage, not more variations of the entry page.
+assessment: All 7 scenarios are ACTIVE and passing with no consecutive failures, so there is nothing to repair, quarantine, or re-cadence. Coverage is heavily concentrated on one route (/app/training-entry carries all 7 scenarios), while the declared area app.routing has zero scenarios. Beyond that, the briefing implies a larger unexplored surface: the teacher-entry scenario opens app in a new tab after authentication, meaning an authenticated LMS shell (home/dashboard, navigation, student entry follow-through) almost certainly exists behind the entry page and nobody has visited it. The next gap is routing/navigation coverage, not more variations of the entry page.
 coverage_gaps:
   - app.routing (declared area with zero scenarios)
-  - authenticated lms-web interior (post-entry home/navigation, reachable via the new tab opened by teacher entry)
+  - authenticated app interior (post-entry home/navigation, reachable via the new tab opened by teacher entry)
   - student entry flow beyond the entry button (getUser renders 학생 입장 버튼, downstream flow unknown)
 actions:
   - verb: discover_route
     target: app.routing
     reason: known_areas_with_no_scenario explicitly lists app.routing with no scenario; a browser-agent sweep of the app's routes/menu links will enumerate reachable paths and propose scenarios for navigation behaviour that is currently untested.
   - verb: discover_route
-    target: /lms-web
-    reason: scenario training-entry-teacher-entry-opens-lms confirms teacher auth opens lms-web in a new tab, but every existing scenario lives on /lms-web/training-entry; opening the lms-web shell lets the Browser Agent look around the post-entry home and propose scenarios for the main authenticated area, the largest unvisited surface on the allowed host.
+    target: /app
+    reason: scenario training-entry-teacher-entry-opens-lms confirms teacher auth opens app in a new tab, but every existing scenario lives on /app/training-entry; opening the app shell lets the Browser Agent look around the post-entry home and propose scenarios for the main authenticated area, the largest unvisited surface on the allowed host.
   - verb: discover_route
-    target: /lms-web/training-entry (student entry path)
+    target: /app/training-entry (student entry path)
     reason: training-entry-user-list-api shows a 학생 입장 버튼 is rendered from the getUser API, but no scenario follows the student entry flow; the student path is a distinct capability branch of training.entry with zero coverage, and it is read-only/reversible to open and observe.
 saturated: false

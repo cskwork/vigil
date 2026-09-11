@@ -88,7 +88,7 @@ func gitConfig(tmp, repo string) *config.Config {
 	cfg.Discovery.Adapter = "generic-git"
 	cfg.Discovery.Branch = "main"
 	cfg.Discovery.PathPrefixes = []string{"src/components/entry/"}
-	cfg.Discovery.RouteMap = []config.RouteMapEntry{{PathPrefix: "src/components/entry/", Route: "/lms-web/training-entry"}}
+	cfg.Discovery.RouteMap = []config.RouteMapEntry{{PathPrefix: "src/components/entry/", Route: "/app/training-entry"}}
 	cfg.Discovery.HistoryLimit = 3
 	return cfg
 }
@@ -148,7 +148,7 @@ func TestGitPollFiltersMergesAndAdvancesCursor(t *testing.T) {
 	if !slices.Equal(ev.ChangedPaths, wantPaths) {
 		t.Fatalf("changed paths = %v, want %v", ev.ChangedPaths, wantPaths)
 	}
-	if !slices.Equal(ev.Routes, []string{"/lms-web/training-entry"}) {
+	if !slices.Equal(ev.Routes, []string{"/app/training-entry"}) {
 		t.Fatalf("routes = %v", ev.Routes)
 	}
 	if c := cursorOf(t, st, repo.dir); c != shaDocs {
@@ -169,7 +169,7 @@ func TestGitPollFiltersMergesAndAdvancesCursor(t *testing.T) {
 	if len(events) != 1 || events[0].FeatureID != "commit-"+shaLoader[:7] || events[0].ShippedSHA != shaLoader {
 		t.Fatalf("third poll = %+v, want commit-%s", events, shaLoader[:7])
 	}
-	if !slices.Equal(events[0].Routes, []string{"/lms-web/training-entry"}) {
+	if !slices.Equal(events[0].Routes, []string{"/app/training-entry"}) {
 		t.Fatalf("routes = %v", events[0].Routes)
 	}
 	if c := cursorOf(t, st, repo.dir); c != shaBump {

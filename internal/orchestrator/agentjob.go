@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,6 +76,8 @@ func (o *Orchestrator) HandleAgentJob(ctx context.Context, job *model.Job) error
 		task = agent.TaskVerifyChange
 	case model.JobAgentRepair:
 		task = agent.TaskRepair
+	case model.JobAgentReproduce:
+		task = agent.TaskReproduce
 	default:
 		return fmt.Errorf("orchestrator: job %d kind %s is not an agent job", job.ID, job.Kind)
 	}
@@ -89,6 +93,7 @@ func (o *Orchestrator) HandleAgentJob(ctx context.Context, job *model.Job) error
 		return err
 	}
 	dir := o.agentDir(firstNonEmpty(p.FeatureID, p.ScenarioID, "task"), o.now())
+	_ = o.st.SetState(ctx, stateAgentDirPrefix+strconv.FormatInt(job.ID, 10), dir)
 	res, err := o.agent.Run(ctx, req, dir)
 	if err != nil {
 		return fmt.Errorf("agent job %d: %w", job.ID, err)
@@ -125,8 +130,45 @@ func (o *Orchestrator) HandleAgentJob(ctx context.Context, job *model.Job) error
 	if len(res.HostViolations) > 0 {
 		o.logger.Printf("agent job %d: host allowlist violated: %v", job.ID, res.HostViolations)
 	}
+	o.persistFindings(ctx, job, p, res, gates)
 	o.writeGateLog(ctx, dir, gates)
 	return nil
+}
+
+// AgentDirForJob returns the evidence directory the given agent job wrote to
+// (empty when the job never ran here). gate.json lives in it.
+func (o *Orchestrator) AgentDirForJob(ctx context.Context, jobID int64) string {
+	dir, err := o.st.GetState(ctx, stateAgentDirPrefix+strconv.FormatInt(jobID, 10))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(dir)
+}
+
+// persistFindings stores the agent's data-analyst findings for every task kind.
+// The scenario is the job's own (repair) or the first script the gate persisted
+// (new/reproduce); findings without a scenario still hang off the feature.
+func (o *Orchestrator) persistFindings(ctx context.Context, job *model.Job, p jobPayload, res *agent.Result, gates []GateOutcome) {
+	if res == nil || len(res.Findings) == 0 {
+		return
+	}
+	scenarioID := p.ScenarioID
+	if scenarioID == "" {
+		for _, g := range gates {
+			if g.ScenarioID != "" && g.State != "" && g.State != model.StateDuplicate {
+				scenarioID = g.ScenarioID
+				break
+			}
+		}
+	}
+	for _, f := range agent.NormalizeFindings(res.Findings) {
+		rec := &model.Finding{ProjectID: o.cfg.Project.ID, FeatureID: p.FeatureID, ScenarioID: scenarioID, JobID: job.ID,
+			Kind: f.Kind, Where: f.Where, Expected: f.Expected, Actual: f.Actual, Evidence: f.Evidence}
+		if _, err := o.st.InsertFinding(ctx, rec); err != nil {
+			o.logger.Printf("agent job %d: finding not stored: %v", job.ID, err)
+		}
+	}
+	o.logger.Printf("agent job %d: %d finding(s) stored (scenario=%s feature=%s)", job.ID, len(res.Findings), scenarioID, p.FeatureID)
 }
 
 // buildRequest assembles the bounded PRD §11 request.
@@ -157,6 +199,15 @@ func (o *Orchestrator) buildRequest(ctx context.Context, task string, job *model
 		if feat.Summary != "" {
 			evidenceParts = append(evidenceParts, "Feature summary: "+feat.Summary)
 		}
+		if task == agent.TaskReproduce {
+			// The report itself is the oracle source: what the reporter saw and expected.
+			report := fmt.Sprintf("Reported %s %s", firstNonEmpty(feat.Kind, "item"), firstNonEmpty(feat.Ref, feat.ID))
+			if feat.Details != "" {
+				report += ":\n" + feat.Details
+			}
+			evidenceParts = append(evidenceParts, report)
+			req.MaxScenarios = 1
+		}
 		ids, err := o.ImpactedScenarios(ctx, feat)
 		if err != nil {
 			return req, err
@@ -182,7 +233,11 @@ func (o *Orchestrator) buildRequest(ctx context.Context, task string, job *model
 		}
 		req.FailingScript = v.YAML
 		req.KnownScripts = append(req.KnownScripts, fmt.Sprintf("%s/v%d", m.ID, m.CurrentVersion))
-		req.FailureDetail = o.failureDetail(ctx, p.ScenarioID, p.RunID)
+		if p.ValidationError != "" {
+			req.FailureDetail = "DSL validation failed: " + p.ValidationError
+		} else {
+			req.FailureDetail = o.failureDetail(ctx, p.ScenarioID, p.RunID)
+		}
 		if req.FeatureID == "" {
 			req.FeatureID = m.OracleFeature
 		}
@@ -215,6 +270,13 @@ func (o *Orchestrator) buildRequest(ctx context.Context, task string, job *model
 		}
 	}
 	req.Evidence = strings.Join(evidenceParts, "\n\n")
+	if o.cfg.Agent.DomainFile != "" {
+		rules, err := agent.ReadDomainFile(o.cfg.Abs(o.cfg.Agent.DomainFile))
+		if err != nil {
+			o.logger.Printf("agent.domain_file %s unreadable, task runs without domain rules: %v", o.cfg.Agent.DomainFile, err)
+		}
+		req.DomainRules = rules
+	}
 	for name := range o.cfg.Personas {
 		req.Personas = append(req.Personas, name)
 	}
@@ -240,8 +302,62 @@ func (o *Orchestrator) failureDetail(ctx context.Context, scenarioID string, run
 	if pick == nil {
 		return ""
 	}
-	return fmt.Sprintf("run %d on %s: outcome %s; failed step %d (%s); expected %q; actual %q; error: %s; evidence: %s",
-		pick.ID, pick.Browser, pick.Outcome, pick.FailedStep, pick.FailedAction, pick.Expected, pick.Actual, pick.Error, pick.EvidenceDir)
+	return fmt.Sprintf("run %d on %s: outcome %s; failed step %d (%s); expected %q; actual %q; error: %s; evidence: %s%s",
+		pick.ID, pick.Browser, pick.Outcome, pick.FailedStep, pick.FailedAction, pick.Expected, pick.Actual, pick.Error, pick.EvidenceDir,
+		stepTrace(pick.EvidenceDir, pick.FailedStep))
+}
+
+// stepTrace renders what every step of the failing run actually did, up to the one that
+// failed. The failed step on its own is misleading: a click that lands on the wrong element
+// succeeds, and the run only breaks a step or two later at a wait. Given just that wait, the
+// model reasonably concludes the application changed, and repairs the wrong thing. The agent
+// cannot open the evidence directory itself - it has browser tools only - so the trace has to
+// travel in the request.
+func stepTrace(evidenceDir string, failedStep int) string {
+	if evidenceDir == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(evidenceDir, "steps.json"))
+	if err != nil {
+		return ""
+	}
+	var doc struct {
+		Steps []struct {
+			Index  int    `json:"index"`
+			Kind   string `json:"kind"`
+			OK     bool   `json:"ok"`
+			Actual string `json:"actual"`
+		} `json:"steps"`
+		Notes []string `json:"notes"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil || len(doc.Steps) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("; what the run actually did (check this before concluding the app changed):")
+	for _, s := range doc.Steps {
+		if failedStep > 0 && s.Index > failedStep {
+			break
+		}
+		state := "ok"
+		if !s.OK {
+			state = "FAILED"
+		}
+		fmt.Fprintf(&b, " [%d %s %s: %s]", s.Index, s.Kind, state, clip(s.Actual, 160))
+	}
+	for _, n := range doc.Notes {
+		b.WriteString(" note: " + clip(n, 200))
+	}
+	return b.String()
+}
+
+// clip shortens on rune boundaries so Korean evidence text is never cut mid-character.
+func clip(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 // gitEvidence returns `git show --stat` plus diffs of changed paths (best-effort, ≤12KB).
@@ -312,13 +428,23 @@ func (o *Orchestrator) gateCandidate(ctx context.Context, job *model.Job, feat *
 		g.Reason = err.Error()
 		return g
 	}
+	reproduce := isReproduce(job, feat)
 	if err := sc.Validate(flowIDs); err != nil {
-		g.Reason = "invalid: " + err.Error()
-		if _, perr := o.persist(ctx, sc, model.StateNeedsReview, "agent", "invalid candidate from agent job "+fmt.Sprint(job.ID)+": "+err.Error(), yamlText, flows); perr != nil {
-			g.Reason += " (not persisted: " + perr.Error() + ")"
-		} else {
-			g.State = model.StateNeedsReview
+		// An invalid script is usually a wrong locator kind or a missing field,
+		// not a reason to spend a human's attention: keep the raw text as a
+		// CANDIDATE and let the agent repair it a bounded number of times.
+		id, perr := o.persist(ctx, sc, model.StateCandidate, "agent", "invalid candidate from agent job "+fmt.Sprint(job.ID)+": "+err.Error(), yamlText, flows)
+		if perr != nil {
+			g.Reason = "invalid: " + err.Error() + " (not persisted: " + perr.Error() + ")"
+			return o.recordGate(ctx, g)
 		}
+		g.ScenarioID, g.Version = id, sc.Scenario.Version
+		if reproduce {
+			o.tagSource(ctx, id, feat)
+		}
+		p.ValidationError = err.Error()
+		g = o.retryOrReview(ctx, g, id, job, p, "DSL validation failed: "+err.Error())
+		o.logger.Printf("agent job %d: candidate %s → %s (%s)", job.ID, id, g.State, g.Reason)
 		return o.recordGate(ctx, g)
 	}
 	fp := sc.Fingerprint(flows)
@@ -347,17 +473,40 @@ func (o *Orchestrator) gateCandidate(ctx context.Context, job *model.Job, feat *
 		return o.recordGate(ctx, g)
 	}
 	g.ScenarioID, g.Version = id, sc.Scenario.Version
+	if reproduce {
+		o.tagSource(ctx, id, feat)
+	}
 	if g.State != model.StateCandidate {
 		return o.recordGate(ctx, g)
 	}
 	// Independent validation through the deterministic runner (AC-05).
-	outcome, detail, err := o.validateByRun(ctx, job, id, sc, flows, p)
+	outcome, detail, run, err := o.validateByRun(ctx, job, id, sc, flows, p)
 	if err != nil {
 		g.State, g.Reason = model.StateNeedsReview, "validation not possible: "+err.Error()
 		_ = o.st.SetScenarioState(ctx, o.cfg.Project.ID, id, model.StateNeedsReview)
 		return o.recordGate(ctx, g)
 	}
-	if outcome == model.OutcomePass {
+	g = o.settleValidation(ctx, g, id, job, p, res, feat, reproduce, outcome, detail, run)
+	o.logger.Printf("agent job %d: candidate %s → %s (%s)", job.ID, id, g.State, g.Reason)
+	return o.recordGate(ctx, g)
+}
+
+// settleValidation turns a validation run of a CANDIDATE into its next state:
+// PENDING_APPROVAL (reproduce: PASS or APP_FAILURE), SOAK (ship: PASS), or the
+// bounded repair loop. Shared by the candidate gate and the repair gate.
+func (o *Orchestrator) settleValidation(ctx context.Context, g GateOutcome, id string, job *model.Job, p jobPayload, res *agent.Result, feat *model.Feature, reproduce bool, outcome model.Outcome, detail string, run *model.Run) GateOutcome {
+	if reproduce && (outcome == model.OutcomePass || outcome == model.OutcomeAppFailure) {
+		// Both answers are useful to a human: PASS = the expected behaviour holds
+		// (not reproduced), APP_FAILURE = the flow reached the symptom. Neither
+		// becomes coverage until someone approves it.
+		o.clearFixAttempts(ctx, id)
+		rec := reproductionFor(outcome, run, res, feat)
+		if err := o.st.SetScenarioPendingApproval(ctx, o.cfg.Project.ID, id, rec.JSON()); err != nil {
+			g.Reason = err.Error()
+		} else {
+			g.State, g.Reason = model.StatePendingApproval, fmt.Sprintf("validation run %s: verdict=%s reproduced=%v at_step=%d; waiting for approval", outcome, rec.Verdict, rec.Reproduced, rec.AtStep)
+		}
+	} else if outcome == model.OutcomePass {
 		o.clearFixAttempts(ctx, id)
 		if err := o.st.SetScenarioState(ctx, o.cfg.Project.ID, id, model.StateSoak); err == nil {
 			_ = o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, id, o.now())
@@ -365,22 +514,31 @@ func (o *Orchestrator) gateCandidate(ctx context.Context, job *model.Job, feat *
 		} else {
 			g.Reason = err.Error()
 		}
-	} else if n, limit, retried := o.retryFix(ctx, id, job, p, detail); retried {
+	} else {
+		p.ValidationError = "" // a run failure, not a DSL one: the repair reads the run
+		g = o.retryOrReview(ctx, g, id, job, p, fmt.Sprintf("validation run %s: %s", outcome, detail))
+	}
+	return g
+}
+
+// retryOrReview enqueues another agent repair while policy.agent_fix_attempts
+// allows it (state stays CANDIDATE), otherwise parks the scenario in NEEDS_REVIEW.
+func (o *Orchestrator) retryOrReview(ctx context.Context, g GateOutcome, id string, job *model.Job, p jobPayload, detail string) GateOutcome {
+	if n, limit, retried := o.retryFix(ctx, id, job, p, detail); retried {
 		// A failed validation usually means the agent wrote a brittle locator,
 		// not that a human is needed. Let it rewrite the script a bounded number
 		// of times before spending someone's attention.
 		g.State = model.StateCandidate
-		g.Reason = fmt.Sprintf("validation run %s: %s; AGENT_REPAIR attempt %d/%d enqueued", outcome, detail, n, limit)
+		g.Reason = fmt.Sprintf("%s; AGENT_REPAIR attempt %d/%d enqueued", detail, n, limit)
 	} else {
 		_ = o.st.SetScenarioState(ctx, o.cfg.Project.ID, id, model.StateNeedsReview)
 		g.State = model.StateNeedsReview
-		g.Reason = fmt.Sprintf("validation run %s: %s", outcome, detail)
+		g.Reason = detail
 		if limit > 1 {
 			g.Reason += fmt.Sprintf(" (after %d agent fix attempt(s))", limit)
 		}
 	}
-	o.logger.Printf("agent job %d: candidate %s → %s (%s)", job.ID, id, g.State, g.Reason)
-	return o.recordGate(ctx, g)
+	return g
 }
 
 // fixAttemptsKey counts attempts in the current cycle; it governs the limit and
@@ -417,13 +575,21 @@ func (o *Orchestrator) retryFix(ctx context.Context, scenarioID string, job *mod
 	if err := o.st.SetState(ctx, fixAttemptsKey(scenarioID), strconv.Itoa(next)); err != nil {
 		return used, limit, false
 	}
+	operator := p.Operator || (job != nil && job.Priority >= model.PriorityUserRequest)
+	priority := model.PriorityRecentFailure
+	if operator {
+		// The repair of an operator-initiated task stays operator-initiated:
+		// same queue precedence, same agent-budget bypass. The flag travels in
+		// the payload because claiming a user request consumes priority 110.
+		priority = model.PriorityUserRequest
+	}
 	j := &model.Job{
 		ProjectID:  o.cfg.Project.ID,
 		Kind:       model.JobAgentRepair,
-		Priority:   model.PriorityRecentFailure,
+		Priority:   priority,
 		ScenarioID: scenarioID,
 		FeatureID:  p.FeatureID,
-		Payload:    jobPayload{ScenarioID: scenarioID, FeatureID: p.FeatureID, ShippedSHA: p.ShippedSHA, RunID: p.RunID, Trigger: "validation-retry"}.String(),
+		Payload:    jobPayload{ScenarioID: scenarioID, FeatureID: p.FeatureID, ShippedSHA: p.ShippedSHA, RunID: p.RunID, Trigger: "validation-retry", ValidationError: p.ValidationError, Operator: operator}.String(),
 	}
 	// The never-resetting sequence is in the dedup key: without it a second
 	// repair of the same version is silently dropped, and after a counter reset
@@ -536,25 +702,25 @@ func (o *Orchestrator) structuralDuplicate(ctx context.Context, sc *dsl.Scenario
 
 // validateByRun executes the scenario once through the deterministic runner and
 // records the run. Returns the classified outcome and a short detail.
-func (o *Orchestrator) validateByRun(ctx context.Context, job *model.Job, id string, sc *dsl.Scenario, flows map[string]*dsl.Flow, p jobPayload) (model.Outcome, string, error) {
+func (o *Orchestrator) validateByRun(ctx context.Context, job *model.Job, id string, sc *dsl.Scenario, flows map[string]*dsl.Flow, p jobPayload) (model.Outcome, string, *model.Run, error) {
 	if o.run == nil {
-		return "", "", errors.New("runner unavailable")
+		return "", "", nil, errors.New("runner unavailable")
 	}
 	browser := model.Browser(sc.Browser.Primary)
 	if browser == "" {
 		browser = model.Browser(o.cfg.Browser.Primary)
 	}
-	if sc.Browser.RequiresChromium {
+	if sc.RequiresChromiumEngine() {
 		browser = model.BrowserChromium
 	}
 	owner := fmt.Sprintf("validate:%s:%d", id, job.ID)
 	if len(sc.Resources.Locks) > 0 {
 		ok, err := o.st.TryAcquireLocks(ctx, sc.Resources.Locks, owner, 2*o.cfg.Browser.RunTimeout.Duration+time.Minute)
 		if err != nil {
-			return "", "", err
+			return "", "", nil, err
 		}
 		if !ok {
-			return "", "", fmt.Errorf("resource locks busy: %v", sc.Resources.Locks)
+			return "", "", nil, fmt.Errorf("resource locks busy: %v", sc.Resources.Locks)
 		}
 		defer func() { _ = o.st.ReleaseLocks(context.Background(), sc.Resources.Locks, owner) }()
 	}
@@ -565,7 +731,9 @@ func (o *Orchestrator) validateByRun(ctx context.Context, job *model.Job, id str
 		Scenario:         sc,
 		Flows:            flows,
 		Browser:          browser,
-		BaseURL:          o.cfg.Target.BaseURL,
+		BaseURL:          o.cfg.DefaultEnv().BaseURL,
+		Environment:      o.cfg.DefaultEnv().Name,
+		AllowedHosts:     o.cfg.DefaultEnv().AllowedHosts,
 		Persona:          o.personaMap(sc.Preconditions.Persona),
 		EvidenceDir:      dir,
 		StepTimeout:      o.cfg.Browser.StepTimeout.Duration,
@@ -574,7 +742,7 @@ func (o *Orchestrator) validateByRun(ctx context.Context, job *model.Job, id str
 	}
 	res, err := o.run.Run(ctx, spec)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	outcome, why := classify.Classify(classify.Input{Result: res, Browser: browser, Attempt: 1, TargetHealthy: true})
 	run := &model.Run{
@@ -604,12 +772,175 @@ func (o *Orchestrator) validateByRun(ctx context.Context, job *model.Job, id str
 	if len(res.GlobalAssertionFailures) > 0 {
 		detail = strings.TrimSpace(detail + " " + strings.Join(res.GlobalAssertionFailures, "; "))
 	}
-	if _, err := o.st.InsertRun(ctx, run); err != nil {
-		return outcome, detail, err
+	runID, err := o.st.InsertRun(ctx, run)
+	if err != nil {
+		return outcome, detail, nil, err
 	}
+	run.ID = runID
 	// Counters only (state is CANDIDATE here, so soak_passes is untouched).
 	_, _ = o.st.RecordScenarioOutcome(ctx, o.cfg.Project.ID, id, outcome, run.FinishedAt)
-	return outcome, firstNonEmpty(detail, res.Error), nil
+	return outcome, firstNonEmpty(detail, res.Error), run, nil
+}
+
+// ---- reproduce gate ----------------------------------------------------------
+
+// ErrNotReproducible is returned when a ship feature is handed to `vigil reproduce`.
+var ErrNotReproducible = errors.New("orchestrator: only issue/log features can be reproduced")
+
+// EnqueueReproduce queues an AGENT_REPRODUCE job for a known issue/log feature
+// (same dedup key as the loop, so a queued job is reused) and reports its id.
+// It is operator-initiated (`vigil reproduce`), so it carries PriorityUserRequest:
+// a person waiting at a terminal is not deferred by the hourly agent budget.
+func (o *Orchestrator) EnqueueReproduce(ctx context.Context, f *model.Feature) (int64, bool, error) {
+	if f == nil {
+		return 0, false, errors.New("orchestrator: nil feature")
+	}
+	if model.IsShipKind(f.Kind) {
+		return 0, false, fmt.Errorf("%w: %s is a %s feature", ErrNotReproducible, f.ID, firstNonEmpty(f.Kind, model.FeatureKindShip))
+	}
+	id, created, err := o.enqueueAgentJobAt(ctx, model.JobAgentReproduce, f.ID, f.LatestShippedSHA,
+		jobPayload{FeatureID: f.ID, ShippedSHA: f.LatestShippedSHA, Trigger: string(model.ActionReproduce), Operator: true}, model.PriorityUserRequest)
+	if err == nil && !created {
+		// A job the loop already queued for this feature is reused; the person
+		// asking for it now outranks the scan that queued it.
+		_ = o.st.RaiseJobPriority(ctx, id, model.PriorityUserRequest)
+	}
+	return id, created, err
+}
+
+// ReproduceRequest builds the bounded request an AGENT_REPRODUCE job would send,
+// without calling the model (dry runs).
+func (o *Orchestrator) ReproduceRequest(ctx context.Context, f *model.Feature) (agent.Request, error) {
+	if f == nil {
+		return agent.Request{}, errors.New("orchestrator: nil feature")
+	}
+	if model.IsShipKind(f.Kind) {
+		return agent.Request{}, fmt.Errorf("%w: %s is a %s feature", ErrNotReproducible, f.ID, firstNonEmpty(f.Kind, model.FeatureKindShip))
+	}
+	job := &model.Job{Kind: model.JobAgentReproduce, FeatureID: f.ID}
+	return o.buildRequest(ctx, agent.TaskReproduce, job, jobPayload{FeatureID: f.ID, ShippedSHA: f.LatestShippedSHA, Trigger: string(model.ActionReproduce)}, f)
+}
+
+// isReproduce reports whether a candidate comes from a reproduce task (queue item).
+func isReproduce(job *model.Job, feat *model.Feature) bool {
+	if job != nil && job.Kind == model.JobAgentReproduce {
+		return true
+	}
+	return feat != nil && !model.IsShipKind(feat.Kind)
+}
+
+// tagSource records which queue item (issue key / log signature) a scenario came from.
+func (o *Orchestrator) tagSource(ctx context.Context, id string, feat *model.Feature) {
+	if feat == nil || id == "" {
+		return
+	}
+	if err := o.st.SetScenarioSource(ctx, o.cfg.Project.ID, id, firstNonEmpty(feat.Ref, feat.ID), firstNonEmpty(feat.Kind, model.FeatureKindShip)); err != nil {
+		o.logger.Printf("scenario %s: source not recorded: %v", id, err)
+	}
+}
+
+// reproductionRecord is the JSON stored in scenarios.reproduction for a human to read.
+// Verdict is the corroborated answer; Reproduced stays in the JSON for older readers.
+type reproductionRecord struct {
+	Verdict     string `json:"verdict"`
+	Reproduced  bool   `json:"reproduced"`
+	AtStep      int    `json:"at_step"`
+	ClaimedStep int    `json:"claimed_step,omitempty"`
+	Symptom     string `json:"symptom"`
+	Note        string `json:"note,omitempty"`
+	Why         string `json:"why,omitempty"`
+	RunID       int64  `json:"run_id"`
+}
+
+// Reproduction verdicts (H-1). All three still wait for a human decision.
+const (
+	verdictConfirmed   = "confirmed"   // the run reached the symptom and the agent agrees
+	verdictUnconfirmed = "unconfirmed" // the expected behaviour held, or the agent said nothing
+	verdictDisputed    = "disputed"    // the run failed but the agent's own claim disagrees
+)
+
+func (r reproductionRecord) JSON() string {
+	b, _ := json.Marshal(r)
+	return string(b)
+}
+
+// reproductionFor corroborates the validation run with the agent's own block.
+// An APP_FAILURE alone proves nothing: a script may assert an exact number that
+// a healthy page never shows (`expected 40, got 37`). It counts as a reproduction
+// only when the agent also claims the symptom at the same step (±1) or reports a
+// finding on the same route; otherwise the disagreement is recorded for the human.
+func reproductionFor(outcome model.Outcome, run *model.Run, res *agent.Result, feat *model.Feature) reproductionRecord {
+	rec := reproductionRecord{Verdict: verdictUnconfirmed}
+	if run != nil {
+		rec.RunID = run.ID
+	}
+	var claim *agent.Reproduction
+	if res != nil {
+		claim = res.Reproduction
+	}
+	if claim != nil {
+		rec.Symptom, rec.Note = strings.TrimSpace(claim.Symptom), strings.TrimSpace(claim.Note)
+		rec.ClaimedStep = claim.AtStep
+	}
+	if rec.Symptom == "" && feat != nil {
+		rec.Symptom = firstLine(feat.Summary)
+	}
+	switch {
+	case outcome != model.OutcomeAppFailure:
+		rec.Why = fmt.Sprintf("검증 실행 결과가 %s입니다: 기대 동작이 유지됐습니다", outcome)
+		return rec
+	case claim == nil:
+		rec.Why = "에이전트가 재현 결과를 보고하지 않아 실행 실패만으로는 확정할 수 없습니다"
+		return rec
+	}
+	failed := 0
+	if run != nil {
+		failed = run.FailedStep
+	}
+	rec.AtStep = failed
+	if rec.AtStep == 0 {
+		rec.AtStep = claim.AtStep
+	}
+	switch {
+	case !claim.Reproduced:
+		rec.Verdict, rec.Why = verdictDisputed, fmt.Sprintf("실행은 %d단계에서 실패했지만 에이전트는 재현되지 않았다고 보고했습니다", failed)
+	case stepAgrees(failed, claim.AtStep) || findingCorroborates(res, feat):
+		rec.Verdict, rec.Reproduced = verdictConfirmed, true
+	default:
+		rec.Verdict, rec.Why = verdictDisputed, fmt.Sprintf("실행은 %d단계에서 실패했지만 에이전트는 %d단계를 주장했고 같은 화면의 발견 사항도 없습니다", failed, claim.AtStep)
+	}
+	return rec
+}
+
+// stepAgrees accepts the agent's step when it is within ±1 of the failed step
+// (the agent counts the step it observed, the runner the step that asserted).
+func stepAgrees(failed, claimed int) bool {
+	if failed == 0 || claimed == 0 {
+		return false
+	}
+	d := failed - claimed
+	return d >= -1 && d <= 1
+}
+
+// findingCorroborates reports whether the agent filed a finding on a route the
+// validated feature covers, which independently places the symptom on that screen.
+func findingCorroborates(res *agent.Result, feat *model.Feature) bool {
+	if res == nil || feat == nil {
+		return false
+	}
+	for _, f := range res.Findings {
+		where := strings.TrimSpace(f.Where)
+		if where == "" {
+			continue
+		}
+		for _, route := range feat.Routes {
+			route = strings.TrimSpace(route)
+			if len(route) > 1 && strings.Contains(where, route) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ---- repair gate (AC-09) --------------------------------------------------
@@ -634,52 +965,102 @@ func (o *Orchestrator) gateRepair(ctx context.Context, job *model.Job, p jobPayl
 	if strings.TrimSpace(res.ScriptPatch) == "" {
 		return review("PATCH_SCRIPT without script_patch")
 	}
-	oldSc, err := dsl.Parse([]byte(ver.YAML))
-	if err != nil {
-		return review("current version does not parse: " + err.Error())
-	}
-	newSc, err := dsl.Parse([]byte(res.ScriptPatch))
-	if err != nil {
-		return review("patch does not parse: " + err.Error())
-	}
 	flows, flowIDs, err := o.loadFlows(ctx)
 	if err != nil {
 		return review(err.Error())
 	}
-	if why := oracleDiff(oldSc, newSc, flows); why != "" {
-		return review("repair changed the business oracle (AC-09): " + why)
+	candidate := m.State == model.StateCandidate
+	newSc, err := dsl.Parse([]byte(res.ScriptPatch))
+	if err != nil {
+		if !candidate {
+			return review("patch does not parse: " + err.Error())
+		}
+		// Keep the agent's own text as the current version so the next attempt
+		// sees what it wrote; the fingerprint is a hash of the raw text.
+		nv := o.repairVersion(m.ID, ver.Version+1, res.ScriptPatch, rawFingerprint(res.ScriptPatch), job, res)
+		if err := o.st.AddScenarioVersion(ctx, o.cfg.Project.ID, nv, nil); err != nil {
+			return review("new version not stored: " + err.Error())
+		}
+		g.Version = nv.Version
+		p.ValidationError = "parse: " + err.Error()
+		g = o.retryOrReview(ctx, g, m.ID, job, p, "DSL validation failed: patch does not parse: "+err.Error())
+		o.logger.Printf("scenario %s: %s", m.ID, g.Reason)
+		return o.recordGate(ctx, g)
+	}
+	// The oracle must not move (AC-09). A current version that does not parse or
+	// validate has no oracle to compare against: treat it as no diff.
+	if oldSc, err := dsl.Parse([]byte(ver.YAML)); err == nil && oldSc.Validate(flowIDs) == nil {
+		if why := oracleDiff(oldSc, newSc, flows); why != "" {
+			return review("repair changed the business oracle (AC-09): " + why)
+		}
 	}
 	newSc.Scenario.ID = m.ID
 	newSc.Scenario.Version = ver.Version + 1
 	if err := newSc.Validate(flowIDs); err != nil {
-		return review("patch invalid: " + err.Error())
+		if !candidate {
+			return review("patch invalid: " + err.Error())
+		}
+		nv := o.repairVersion(m.ID, newSc.Scenario.Version, res.ScriptPatch, newSc.Fingerprint(flows), job, res)
+		if err := o.st.AddScenarioVersion(ctx, o.cfg.Project.ID, nv, linksFor(newSc)); err != nil {
+			return review("new version not stored: " + err.Error())
+		}
+		g.Version = nv.Version
+		p.ValidationError = err.Error()
+		g = o.retryOrReview(ctx, g, m.ID, job, p, "DSL validation failed: "+err.Error())
+		o.logger.Printf("scenario %s: %s", m.ID, g.Reason)
+		return o.recordGate(ctx, g)
 	}
-	outcome, detail, err := o.validateByRun(ctx, job, m.ID, newSc, flows, p)
+	outcome, detail, run, err := o.validateByRun(ctx, job, m.ID, newSc, flows, p)
 	if err != nil {
 		return review("patch validation not possible: " + err.Error())
 	}
-	if outcome != model.OutcomePass {
+	reproduce := !model.IsShipKind(m.SourceKind) && m.SourceKind != ""
+	if !candidate && outcome != model.OutcomePass && !(reproduce && outcome == model.OutcomeAppFailure) {
 		return review(fmt.Sprintf("patch validation run %s: %s", outcome, detail))
 	}
 	out, err := yaml.Marshal(newSc)
 	if err != nil {
 		return review(err.Error())
 	}
-	nv := &model.ScenarioVersion{
-		ScenarioID:  m.ID,
-		Version:     newSc.Scenario.Version,
-		YAML:        string(out),
-		Fingerprint: newSc.Fingerprint(flows),
-		CreatedBy:   "repair",
-		Reason:      fmt.Sprintf("agent repair job %d: %s", job.ID, firstLine(firstNonEmpty(res.CoverageDelta, res.Evidence))),
-	}
+	nv := o.repairVersion(m.ID, newSc.Scenario.Version, string(out), newSc.Fingerprint(flows), job, res)
 	if err := o.st.AddScenarioVersion(ctx, o.cfg.Project.ID, nv, linksFor(newSc)); err != nil {
 		return review("new version not stored: " + err.Error())
+	}
+	if candidate {
+		// A repaired candidate takes the same road as a fresh one: approval for
+		// reproduce scripts, SOAK for ship coverage, another repair otherwise.
+		var feat *model.Feature
+		if f, err := o.st.GetFeature(ctx, o.cfg.Project.ID, firstNonEmpty(p.FeatureID, m.OracleFeature)); err == nil {
+			feat = f
+		}
+		g.Version = nv.Version
+		g = o.settleValidation(ctx, g, m.ID, job, p, res, feat, reproduce, outcome, detail, run)
+		g.Reason = fmt.Sprintf("repair v%d → v%d: %s", ver.Version, nv.Version, g.Reason)
+		o.logger.Printf("scenario %s: %s", m.ID, g.Reason)
+		return o.recordGate(ctx, g)
 	}
 	_ = o.st.SetScenarioNextDue(ctx, o.cfg.Project.ID, m.ID, o.now())
 	g.State, g.Version, g.Reason = m.State, nv.Version, fmt.Sprintf("locator/navigation repair validated; v%d → v%d, state %s unchanged", ver.Version, nv.Version, m.State)
 	o.logger.Printf("scenario %s: %s", m.ID, g.Reason)
 	return o.recordGate(ctx, g)
+}
+
+// repairVersion builds the version row an agent repair produces.
+func (o *Orchestrator) repairVersion(id string, version int, yamlText, fingerprint string, job *model.Job, res *agent.Result) *model.ScenarioVersion {
+	return &model.ScenarioVersion{
+		ScenarioID:  id,
+		Version:     version,
+		YAML:        yamlText,
+		Fingerprint: fingerprint,
+		CreatedBy:   "repair",
+		Reason:      fmt.Sprintf("agent repair job %d: %s", job.ID, firstLine(firstNonEmpty(res.CoverageDelta, res.Evidence))),
+	}
+}
+
+// rawFingerprint hashes script text that does not parse (no logical fingerprint exists).
+func rawFingerprint(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return "raw:" + hex.EncodeToString(sum[:])
 }
 
 // oracleDiff returns "" when both scenarios carry the same business oracle:

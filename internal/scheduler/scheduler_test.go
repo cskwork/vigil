@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"vigil/internal/agent"
 	"vigil/internal/config"
 	"vigil/internal/evidence"
+	"vigil/internal/gate"
 	"vigil/internal/model"
 	"vigil/internal/orchestrator"
 	"vigil/internal/runner"
@@ -159,7 +162,7 @@ covers:
   feature: training-entry-page
   capability: training.entry
 steps:
-  - goto: /lms-web/training-entry
+  - goto: /app/training-entry
   - assert_text: { value: 초등 }
 assert:
   no_http_5xx: true
@@ -494,7 +497,7 @@ func TestPanicIsolation(t *testing.T) {
 }
 
 func TestScanOnceGateAndOrchestrate(t *testing.T) {
-	in := &fakeIngest{events: []model.FeatureEvent{{FeatureID: "PROJ-1001", Status: "shipped", ShippedSHA: "6f22ff7a1dcc309395173a5d52aba5ae01ad769a", ShippedAt: time.Now().Add(-time.Minute), Routes: []string{"/lms-web/training-entry"}}}}
+	in := &fakeIngest{events: []model.FeatureEvent{{FeatureID: "PROJ-1001", Status: "shipped", ShippedSHA: "6f22ff7a1dcc309395173a5d52aba5ae01ad769a", ShippedAt: time.Now().Add(-time.Minute), Routes: []string{"/app/training-entry"}}}}
 	g := &fakeGate{state: model.ReadinessWaiting, marker: "1000"}
 	h := newHarness(t, &fakeRunner{}, g, in)
 	ctx := context.Background()
@@ -928,4 +931,142 @@ func TestBrokenScenarioBacksOffInsteadOfHotLooping(t *testing.T) {
 	if due, _ := h.st.ListDueScenarios(ctx, "p", time.Now(), 10); len(due) != 0 {
 		t.Fatal("broken scenario must not be due again immediately")
 	}
+}
+
+// Some origins answer GET immediately but never complete a HEAD. The probe used HEAD, so it
+// timed out and reported an unhealthy target for a site that was serving fine — and that
+// verdict is what decides whether a failing script is drift worth repairing.
+func TestProbeTargetSurvivesAnOriginThatIgnoresHead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			<-r.Context().Done() // never answers
+			return
+		}
+		w.WriteHeader(http.StatusNotFound) // the root having no page is still a healthy origin
+	}))
+	defer srv.Close()
+
+	s := &Scheduler{cfg: &config.Config{}}
+	s.cfg.Target.BaseURL = srv.URL
+	if !s.probeTarget(context.Background()) {
+		t.Fatal("probeTarget = false for an origin that answers GET; a hanging HEAD must not mark the target unhealthy")
+	}
+}
+
+func TestProbeTargetReportsAServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	s := &Scheduler{cfg: &config.Config{}}
+	s.cfg.Target.BaseURL = srv.URL
+	if s.probeTarget(context.Background()) {
+		t.Fatal("probeTarget = true for a 502; 5xx must still count as unhealthy")
+	}
+}
+
+func TestIssueEventIsReadyAtOnceAndReproduceJobReachesTheAgentWorker(t *testing.T) {
+	in := &fakeIngest{events: []model.FeatureEvent{{FeatureID: "PROJ-130", Status: "shipped", ShippedSHA: "jira:PROJ-130:abcd1234", ShippedAt: time.Now(),
+		Kind: model.FeatureKindIssue, Ref: "PROJ-130", Summary: "cart total wrong", Details: "steps", Source: "jira"}}}
+	cfg := testCfg(t)
+	cfg.Deployment.Readiness.Strategy = "delay"
+	cfg.Deployment.Readiness.DelayAfterShip.Duration = 2 * time.Hour
+	h := newHarness(t, &fakeRunner{}, gate.New(cfg), in)
+	ctx := context.Background()
+	if err := h.s.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f, err := h.st.GetFeature(ctx, "p", "PROJ-130")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Kind != model.FeatureKindIssue || f.Ref != "PROJ-130" || f.Details != "steps" || f.Readiness != model.ReadinessReady || f.ReadyAt == nil {
+		t.Fatalf("issue feature after scan: %+v (must be READY without waiting for a deployment)", f)
+	}
+	if len(h.orch.planned) != 1 || h.orch.planned[0] != "PROJ-130" {
+		t.Fatalf("planned = %v", h.orch.planned)
+	}
+
+	// The agent worker claims AGENT_REPRODUCE like the other agent kinds.
+	h.s.AgentAvailable = true
+	h.cfg.Budget.AgentTasksPerHour = 5
+	if _, _, err := h.st.EnqueueJob(ctx, &model.Job{ProjectID: "p", Kind: model.JobAgentReproduce, Priority: model.PriorityNewDirectCoverage, FeatureID: "PROJ-130"}, "agent:PROJ-130"); err != nil {
+		t.Fatal(err)
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- h.s.Loop(loopCtx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.orch.mu.Lock()
+		n := len(h.orch.agent)
+		h.orch.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if len(h.orch.agent) != 1 {
+		t.Fatalf("reproduce job handled %d times", len(h.orch.agent))
+	}
+	if n, _ := h.st.CountJobs(ctx, "p", model.JobDone); n != 1 {
+		t.Fatalf("reproduce job not DONE: %d", n)
+	}
+}
+
+func TestScanDefersIssueFeatureUntilAnAgentIsAvailable(t *testing.T) {
+	ev := model.FeatureEvent{FeatureID: "PROJ-131", Status: "shipped", ShippedSHA: "jira:PROJ-131:abcd1234", ShippedAt: time.Now(),
+		Kind: model.FeatureKindIssue, Ref: "PROJ-131", Summary: "cart total wrong", Details: "steps", Source: "jira"}
+	h := newHarness(t, &fakeRunner{}, nil, &fakeIngest{events: []model.FeatureEvent{ev}})
+	h.cfg.Budget.AgentTasksPerHour = 5
+	ctx := context.Background()
+
+	// `vigil scan` builds the orchestrator without an agent: the decision is circumstantial and must not be marked handled.
+	noAgent := NewWith(h.cfg, h.st, orchestrator.New(h.cfg, h.st, nil, nil, h.s.Evidence()), nil, gate.New(h.cfg), &fakeIngest{events: []model.FeatureEvent{ev}})
+	noAgent.Log = log.New(io.Discard, "", 0)
+	if err := noAgent.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f, err := h.st.GetFeature(ctx, "p", "PROJ-131")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Readiness != model.ReadinessReady || f.LastHandledSHA != "" {
+		t.Fatalf("feature after agent-less scan: %+v (must stay unhandled)", f)
+	}
+	if n := len(jobsOf(t, h.st, model.JobAgentReproduce)); n != 0 {
+		t.Fatalf("reproduce jobs without an agent: %d", n)
+	}
+
+	// The loop has an agent: the same feature is planned again, gets its job and is handled.
+	withAgent := NewWith(h.cfg, h.st, orchestrator.New(h.cfg, h.st, nil, &preemptIntegrationAgent{}, h.s.Evidence()), nil, gate.New(h.cfg), nil)
+	withAgent.Log = log.New(io.Discard, "", 0)
+	if err := withAgent.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f, _ = h.st.GetFeature(ctx, "p", "PROJ-131")
+	if f.LastHandledSHA != f.LatestShippedSHA {
+		t.Fatalf("feature after scan with agent: %+v (must be handled)", f)
+	}
+	if jobs := jobsOf(t, h.st, model.JobAgentReproduce); len(jobs) != 1 || jobs[0].FeatureID != "PROJ-131" {
+		t.Fatalf("reproduce jobs = %+v", jobs)
+	}
+}
+
+func jobsOf(t *testing.T, st *store.Store, kind model.JobKind) []*model.Job {
+	t.Helper()
+	jobs, err := st.ListJobs(context.Background(), "p", []model.JobState{model.JobReady, model.JobLeased}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []*model.Job
+	for _, j := range jobs {
+		if j.Kind == kind {
+			out = append(out, j)
+		}
+	}
+	return out
 }

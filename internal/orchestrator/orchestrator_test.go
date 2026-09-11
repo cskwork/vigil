@@ -22,6 +22,7 @@ import (
 
 type fakeRunner struct {
 	passed bool
+	class  runner.FailureClass // failure class when !passed; default FailAssertion
 	err    error
 	specs  []runner.Spec
 }
@@ -35,6 +36,9 @@ func (f *fakeRunner) Run(_ context.Context, spec runner.Spec) (*runner.Result, e
 	res := &runner.Result{Passed: f.passed, Browser: spec.Browser, StartedAt: now, FinishedAt: now.Add(time.Second)}
 	if !f.passed {
 		res.Class = runner.FailAssertion
+		if f.class != "" {
+			res.Class = f.class
+		}
 		res.FailedStep = &runner.StepResult{Index: 2, Kind: "assert_text", Expected: "1", Actual: "9", Error: "text not found"}
 	}
 	return res, nil
@@ -132,9 +136,9 @@ const freshCandidate = `scenario:
 covers:
   feature: training-entry-page
   capability: entry.training
-  routes: [/lms-web/training-entry]
+  routes: [/app/training-entry]
 steps:
-  - goto: /lms-web/training-entry
+  - goto: /app/training-entry
   - click: { by: role, role: tab, name: "중학" }
   - assert_visible: { by: role, role: tab, name: "정보" }
 assert:
@@ -250,7 +254,7 @@ func plainJob(scenarioID string) *model.Job {
 func TestNoCoverageEnqueuesDiscover(t *testing.T) {
 	o, st, _, _, _ := newTest(t)
 	ctx := context.Background()
-	f := feature(t, st, "training-entry-page", "sha1", []string{"/lms-web/training-entry"}, nil)
+	f := feature(t, st, "training-entry-page", "sha1", []string{"/app/training-entry"}, nil)
 	d, err := o.PlanFeature(ctx, f)
 	if err != nil {
 		t.Fatal(err)
@@ -275,15 +279,15 @@ func TestNoCoverageEnqueuesDiscover(t *testing.T) {
 	}
 	// no agent → NO_ACTION (rule 12)
 	o.agent = nil
-	if d, _ := o.PlanFeature(ctx, f); d.Action != model.ActionNone {
-		t.Fatalf("without agent: %s", d.Action)
+	if d, _ := o.PlanFeature(ctx, f); d.Action != model.ActionNone || !d.Defer {
+		t.Fatalf("without agent: %+v", d)
 	}
 	// budget exhausted → NO_ACTION
 	o.agent = &fakeAgent{}
 	for i := 0; i < 10; i++ {
 		_ = st.RecordBudget(ctx, "p", "agent", 1)
 	}
-	if d, _ := o.PlanFeature(ctx, f); d.Action != model.ActionNone || !strings.Contains(d.Reason, "budget") {
+	if d, _ := o.PlanFeature(ctx, f); d.Action != model.ActionNone || !d.Defer || !strings.Contains(d.Reason, "budget") {
 		t.Fatalf("budget: %s (%s)", d.Action, d.Reason)
 	}
 }
@@ -530,7 +534,7 @@ func TestDuplicateCandidatesRejected(t *testing.T) {
 func TestCandidateValidatedToSoakOrReview(t *testing.T) {
 	o, st, fr, fa, _ := newTest(t)
 	ctx := context.Background()
-	feature(t, st, "training-entry-page", "def456", []string{"/lms-web/training-entry"}, nil)
+	feature(t, st, "training-entry-page", "def456", []string{"/app/training-entry"}, nil)
 	fa.res = &agent.Result{Decision: agent.DecisionNewScript, CoverageDelta: "entry tabs", ScriptCandidates: []string{freshCandidate}}
 	job := agentJob(t, st, model.JobAgentDiscover, "training-entry-page", "def456", "")
 	if err := o.HandleAgentJob(ctx, job); err != nil {
@@ -815,5 +819,42 @@ func TestPinnedBrowserPrecedence(t *testing.T) {
 				t.Fatalf("pinnedBrowser = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// The failed step alone misleads: a click that lands on the wrong element still reports ok,
+// and the run breaks later at a wait. The repair request must carry that earlier truth.
+func TestStepTraceCarriesWhatEachStepActuallyDid(t *testing.T) {
+	dir := t.TempDir()
+	steps := `{"steps":[
+	 {"index":5,"kind":"click","ok":true,"actual":"native click on <li> \"영어 1반 교사A\""},
+	 {"index":6,"kind":"click","ok":true,"actual":"native click on <button> \"학생1 입장하기\""},
+	 {"index":7,"kind":"wait_url","ok":false,"actual":"https://x/app/lms/home"},
+	 {"index":8,"kind":"assert_text","ok":true,"actual":"never reached"}],
+	 "notes":["wait_url: this run has a second tab open"]}`
+	if err := os.WriteFile(filepath.Join(dir, "steps.json"), []byte(steps), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := stepTrace(dir, 7)
+	for _, want := range []string{"학생1 입장하기", "[6 click ok:", "[7 wait_url FAILED:", "second tab"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("trace is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "never reached") {
+		t.Fatalf("trace ran past the failed step:\n%s", got)
+	}
+	if stepTrace("", 7) != "" || stepTrace(dir+"/missing", 7) != "" {
+		t.Fatal("a missing evidence directory must yield no trace, not a partial one")
+	}
+}
+
+func TestClipCutsOnRuneBoundaries(t *testing.T) {
+	if got := clip("교사용_계정_01", 3); got != "교사용…" {
+		t.Fatalf("clip = %q", got)
+	}
+	if got := clip("short", 99); got != "short" {
+		t.Fatalf("clip = %q", got)
 	}
 }
