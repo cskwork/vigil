@@ -288,7 +288,7 @@ function render() {
   if (arriveFromTodo) {
     arriveFromTodo = false;
     const h = $('verify').querySelector('h2');
-    if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); h.scrollIntoView({ block: 'start' }); }
+    if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); claimScroll(h, { block: 'start' }); }
   }
 }
 

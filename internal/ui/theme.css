@@ -146,6 +146,11 @@ th, td { text-align:left; padding:var(--row-y) var(--cell-x); border-bottom:1px 
 thead th { background:var(--surface); color:var(--muted); font-size:var(--fs-sm); font-weight:600; }
 tbody tr:last-child td { border-bottom:0; }
 /* 정렬할 수 있는 머리글. 누르기 전에는 지금까지의 순서와 모양이 그대로입니다. */
+/* WCAG 2.2 SC 2.5.8 은 조작 대상에 24x24 를 요구합니다. 문장 안에 섞인 링크는
+   예외지만 표 머리글 버튼, 줄로 세운 링크, 레일 설정 줄은 예외가 아닙니다. 높이
+   바닥만 24px 로 올리므로 배치와 밀도 토글은 그대로입니다. */
+.sortbtn, .hero-links a, .rail-foot label { min-height:24px; }
+.hero-links a { display:inline-flex; align-items:center; }
 .sortbtn { border:0; background:none; padding:0; margin:0; font:inherit; color:inherit; font-weight:inherit; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
 .sortbtn:hover { color:var(--text); }
 .sortbtn .sarr { font-size:.8em; color:var(--muted); }

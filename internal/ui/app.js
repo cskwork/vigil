@@ -147,10 +147,17 @@ function toast(msg) { const t = $('toast'); if (!t) return; t.textContent = msg;
 // 맡는지를 정합니다. 한 페이지에서 고유 폴러 외에 보조 폴러(예: 레일 배지 갱신)를
 // 더 둘 때는 owner:false 를 주어, 보조 폴러가 그 표시를 건드리지 않게 합니다.
 function poller({ url, every, onData, onError, tick, owner = true }) {
-  let etag = null, lastOk = 0, timer = null, inflight = false;
-  async function refresh(force) {
-    if (inflight) return;
-    inflight = true;
+  let etag = null, lastOk = 0, timer = null, inflight = null;
+  // inflight 는 불리언이 아니라 진행 중인 요청 그 자체입니다. 이미 돌고 있으면 그
+  // 약속을 그대로 돌려주므로, await refresh() 를 한 쪽은 어느 경우에도 "화면이 다시
+  // 그려진 뒤"에 이어서 일할 수 있습니다. 불리언이던 시절에는 폴링과 겹치는 순간
+  // refresh 가 즉시 반환해, 뒤늦게 도착한 응답이 복원해 둔 포커스를 지웠습니다.
+  function refresh(force) {
+    if (inflight) return inflight;
+    inflight = run(force).finally(() => { inflight = null; });
+    return inflight;
+  }
+  async function run(force) {
     try {
       const r = await fetch(typeof url === 'function' ? url() : url, { cache: 'no-cache' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -167,9 +174,14 @@ function poller({ url, every, onData, onError, tick, owner = true }) {
       if (owner && $('live')) $('live').classList.add('off');
       if (owner && $('freshText')) $('freshText').textContent = lastOk ? `갱신 실패, 마지막 성공 ${ago(new Date(lastOk).toLocaleString('sv-SE'))}` : '연결 실패';
       if (onError) onError(e);
-      else if (owner && $('fetchErr')) $('fetchErr').innerHTML = `<div class="errbox"><span>현황 서버에 연결하지 못했습니다 (${esc(e.message)}). vigil가 실행 중인지 확인해 주세요.</span><button class="btn" id="retryBtn">다시 시도</button></div>`;
-      const rb = $('retryBtn'); if (rb) rb.onclick = () => refresh(true);
-    } finally { inflight = false; }
+      else if (owner && $('fetchErr')) {
+        $('fetchErr').innerHTML = `<div class="errbox"><span>현황 서버에 연결하지 못했습니다 (${esc(e.message)}). vigil가 실행 중인지 확인해 주세요.</span><button class="btn" id="retryBtn">다시 시도</button></div>`;
+        // 결선은 반드시 이 블록 안에 둡니다. 밖에 두면 배지 폴러처럼 owner:false 인
+        // 보조 폴러가 남이 그린 '다시 시도' 버튼을 자기 refresh 로 가로채, 버튼이
+        // 화면 데이터 대신 배지 숫자만 다시 읽습니다.
+        const rb = $('retryBtn'); if (rb) rb.onclick = () => refresh(true);
+      }
+    }
   }
   function start() {
     refresh(true);
@@ -416,6 +428,12 @@ function scrollRestore(snap) {
   for (const [k, top] of snap.boxes) { const el = document.querySelector(k); if (el && el.scrollTop !== top) el.scrollTop = top; }
   if (window.scrollY !== snap.y) window.scrollTo(0, snap.y);
 }
+// 재렌더 도중 화면이 "여기로 옮겨 가겠다"고 선언하는 자리입니다. rerender 의 스크롤
+// 복원은 읽던 자리를 지킨다는 뜻이지 의도한 이동까지 되돌린다는 뜻이 아닙니다.
+// 움직임 줄이기를 켜면 scrollIntoView 가 동기라 복원이 곧바로 되돌려 버리므로,
+// scrollY 비교 같은 우연한 가드에 기대지 않고 플래그로 구분합니다.
+let scrollClaimed = false;
+function claimScroll(el, opts) { if (!el) return; scrollClaimed = true; el.scrollIntoView(opts); }
 function rerender(fn, opts) {
   const keepFocus = !(opts && opts.focus === false);
   const prev = document.activeElement;
@@ -425,7 +443,8 @@ function rerender(fn, opts) {
   const fallback = keepFocus && prev && prev.nodeType === 1 && prev.parentElement ? nodePath(prev.parentElement.closest('[id]') || prev.parentElement) : null;
   const snap = scrollSnapshot();
   try { fn(); } finally {
-    scrollRestore(snap);
+    if (!scrollClaimed) scrollRestore(snap);
+    scrollClaimed = false;
     const now = document.activeElement;
     const loose = !now || now === document.body || now === document.documentElement || !document.contains(now);
     if (keepFocus && sel && loose) {

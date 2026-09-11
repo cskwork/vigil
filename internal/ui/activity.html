@@ -13,7 +13,9 @@
 <link rel="stylesheet" href="/ui/theme.css">
 <style>
   .win-row { display:flex; flex-wrap:wrap; gap:14px 18px; align-items:flex-end; margin-top:12px; }
-  .win-row > label { display:flex; flex-direction:column; gap:4px; font-size:var(--fs-sm); color:var(--muted); }
+  /* min-height 는 WCAG 2.2 SC 2.5.8 의 24px 바닥입니다. 체크박스를 감싼 줄이
+     실제 조작 대상이고 문장 속 링크가 아니므로 예외에 해당하지 않습니다. */
+  .win-row > label { display:flex; flex-direction:column; gap:4px; font-size:var(--fs-sm); color:var(--muted); min-height:24px; justify-content:center; }
   .win-row input[type=time], .win-row input[type=text] { border:1px solid var(--control-line); background:var(--surface); border-radius:8px; padding:6px 10px; }
   .win-field { border:0; padding:0; margin:0; min-width:0; }
   .win-field legend { padding:0; margin-bottom:4px; font-size:var(--fs-sm); color:var(--muted); }
