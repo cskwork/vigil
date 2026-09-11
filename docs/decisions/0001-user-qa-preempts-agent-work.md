@@ -24,7 +24,7 @@ When the dashboard is hosted by the loop process, submitting a request cooperati
 
 ### Queue without preemption
 
-Simpler, but a long exploration can delay an explicit operator request by many minutes and violates the confirmed “interrupt current work” behavior.
+Simpler, but a long exploration can delay an explicit operator request by many minutes and violates the confirmed "interrupt current work" behavior.
 
 ### Expose the complete CLI request schema
 

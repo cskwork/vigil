@@ -1,7 +1,7 @@
 scenario:
   id: export.all-steps
   version: 3
-  title: "모든 스텝 타입 — it's a 'quote' test"
+  title: "모든 스텝 타입, it's a 'quote' test"
   class: P1
   mutation: read-only
 covers:

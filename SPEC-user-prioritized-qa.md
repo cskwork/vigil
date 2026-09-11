@@ -18,11 +18,11 @@ Go HTTP server, embedded HTML/CSS/JavaScript, SQLite job queue, existing Browser
 
 ## Project Structure
 
-- `internal/orchestrator/` — shared manual-request validation and registration
-- `internal/scheduler/` — Browser Agent worker preemption and safe requeue
-- `internal/ui/` — HTTP intake, current state, and main-page form
-- `cmd/vigil/` — CLI reuse of the shared request contract and runtime wiring
-- `docs/decisions/` — accepted design rationale
+- `internal/orchestrator/`: shared manual-request validation and registration
+- `internal/scheduler/`: Browser Agent worker preemption and safe requeue
+- `internal/ui/`: HTTP intake, current state, and main-page form
+- `cmd/vigil/`: CLI reuse of the shared request contract and runtime wiring
+- `docs/decisions/`: accepted design rationale
 
 ## Code Style
 
@@ -56,7 +56,7 @@ Use small concrete interfaces at package boundaries. Validate HTTP input once. K
 1. The main page always shows one clearly labelled QA-situation textarea and submit button.
 2. A valid submission creates a manual feature and `AGENT_DISCOVER` job with user priority above repair priority.
 3. If an Agent job is running in the same loop process, it is cancelled cooperatively and returned to READY without consuming an attempt or Agent budget.
-4. The user job runs next, subject to Browser Agent availability. User-initiated preemption is allowed to bypass the hourly Agent budget once so “run now” is truthful.
+4. The user job runs next, subject to Browser Agent availability. User-initiated preemption is allowed to bypass the hourly Agent budget once so "run now" is truthful.
 5. The displaced job resumes later. Deterministic jobs are never interrupted.
 6. The page shows queued, preempting, running, budget-waiting, done, or failed from persisted job state.
 7. Empty, malformed, oversized, cross-origin, and non-POST mutations are rejected.
@@ -65,7 +65,7 @@ Use small concrete interfaces at package boundaries. Validate HTTP input once. K
 ## Assumptions
 
 - The dashboard remains a trusted local/operator surface; this feature does not make `0.0.0.0` safe for untrusted networks.
-- “Interrupt” means cooperative context cancellation and safe requeue, not killing the whole Vigil process.
+- "Interrupt" means cooperative context cancellation and safe requeue, not killing the whole Vigil process.
 - User prose is evidence and exploration guidance, not an approved oracle.
 
 ## Open Questions

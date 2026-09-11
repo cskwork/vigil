@@ -65,7 +65,7 @@ func TestApproveRejectCommands(t *testing.T) {
 		t.Fatalf("dry-run files = %v", files)
 	}
 	body, _ := os.ReadFile(files[0])
-	if !strings.Contains(string(body), "[vigil] QA 스크립트 승인: s1 v1 — 탭 중복 s1") || !strings.Contains(string(body), "매일 09:00 Asia/Seoul") {
+	if !strings.Contains(string(body), "[vigil] QA 스크립트 승인: s1 v1, 탭 중복 s1") || !strings.Contains(string(body), "매일 09:00 Asia/Seoul") {
 		t.Fatalf("dry-run body:\n%s", body)
 	}
 

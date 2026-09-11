@@ -332,7 +332,7 @@ function renderWindow(w) {
   if (!w) return;
   const openNow = w.enabled ? w.active_now : true;
   const detail = w.enabled
-    ? `${winDaysText(w.days)} ${esc(w.from)}–${esc(w.to)} <span class="dev mono">${esc(w.zone)}</span>`
+    ? `${winDaysText(w.days)} ${esc(w.from)} ~ ${esc(w.to)} <span class="dev mono">${esc(w.zone)}</span>`
     : '시간대 제한 없음 · 24시간 검사합니다';
   const nextAt = w.next_change ? ` · 다음 변경 ${esc(w.next_change)}` : '';
   $('winStatus').innerHTML = st({ on: ['지금 검사함', 'ok'], off: ['지금은 검사 중지', 'muted'] }, openNow ? 'on' : 'off')

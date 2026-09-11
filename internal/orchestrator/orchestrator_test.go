@@ -737,7 +737,7 @@ func TestReimportUnchangedFileKeepsSystemVersion(t *testing.T) {
 }
 
 // A pin decides the engine outright (scheduler.pickBrowser), so importing one for an engine
-// the scenario has never passed on must not leave it ACTIVE — that is how a green check goes
+// the scenario has never passed on must not leave it ACTIVE. That is how a green check goes
 // red with nobody asked.
 func TestImportPinToUnprovenBrowserResoaks(t *testing.T) {
 	o, st, _, _, cfg := newTest(t)

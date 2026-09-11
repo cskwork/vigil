@@ -93,7 +93,7 @@ func (a *app) cmdExport(ctx context.Context, args []string) (int, error) {
 	} else {
 		for _, r := range results {
 			if r.Error != "" {
-				a.printf("%s: 실패 — %s\n", r.ID, r.Error)
+				a.printf("%s: 실패, %s\n", r.ID, r.Error)
 				continue
 			}
 			a.printf("%s → %s\n", r.ID, r.Path)

@@ -2,11 +2,11 @@
 
 # vigil
 
-**Continuous browser QA that grows its own coverage.**
+**Browser QA that reproduces the reported bug, then waits for you to approve the check.**
 
-Point it at a deployed web app. It watches your ships, proves them in a real browser,
-files evidence for every run — and a supervised AI loop keeps writing new test
-scenarios until every reachable flow has one.
+Work arrives from a commit, a Jira issue, a log signature, or any command that
+prints events. An agent reproduces the symptom in a real browser and writes a
+scenario for it. You approve that scenario, and vigil runs it every day.
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -16,69 +16,52 @@ scenarios until every reachable flow has one.
 
 ---
 
-## Why vigil
+## What vigil does
 
-Most E2E suites test what somebody remembered to write, break when the page
-changes, and say "assertion failed" without evidence. vigil inverts each of
-those:
+| Stage | What happens |
+|---|---|
+| Take the report | `discovery.adapters` polls git, Jira through `acli`, Loki log signatures, and any `exec` command that prints events. Issue and log features are `READY` the moment they arrive |
+| Reproduce it | The Browser Agent drives a real browser to the reported symptom and writes one scenario that encodes the expected behaviour |
+| Repair its own steps | A scenario that fails validation on a brittle step goes back to the agent, up to `policy.agent_fix_attempts` times |
+| Wait for a person | The script sits in `PENDING_APPROVAL` (`승인 대기`) with a reproduction verdict: `confirmed`, `disputed` or `unconfirmed`. It is never due until someone approves it |
+| Run it daily | `vigil approve` sets `cadence: daily` at `schedule.daily_at` and posts a Korean receipt on the source Jira issue |
+| Check the fix | `run --env <name>` runs a scenario against another named environment. An environment marked `read_only` refuses every scenario that changes data |
+| Say what broke | Every failure is reported as one plain Korean sentence naming its cause. The selector, the raw error and the evidence are one layer deeper |
 
-- **Coverage grows itself.** A supervisor loop reads the QA state on a slow
-  tick, asks a model where scenarios are missing, and turns the answer into
-  browser explorations. Give it one URL; the route map fills itself in from
-  wherever browsers actually go.
-- **The model proposes, code decides.** Every action the model suggests is
-  re-validated by deterministic Go before it becomes a job. There is no verb
-  for deleting coverage — asking for one is refused and logged. A model outage
-  never stops deterministic QA.
-- **Broken scripts repair themselves.** A failed validation gets bounded agent
-  rewrites (`policy.agent_fix_attempts`) before a human ever sees it. Brittle
-  locator? The agent reads the failure and rewrites the step.
-- **Every run leaves evidence.** Console, network, DOM and screenshots per run;
-  failures become reproducible incident reports, not a red X.
-- **Deploy-aware.** Scenarios re-run the moment a shipped commit is actually
-  served (asset-version gate), so "did the deploy break it?" has an answer
-  minutes after the deploy.
+## Coverage grows itself
 
-## Give it one URL
+Give it one URL. A supervisor loop reads the QA state on a slow tick, asks a
+model where scenarios are missing, and turns the answer into browser
+explorations. The route map fills itself in from wherever browsers actually go.
 
-```yaml
-target:
-  base_url: https://your-app.example.com
-supervisor:
-  enabled: true
-```
+The model proposes and code decides. Deterministic Go re-validates every action
+the model suggests before it becomes a job. There is no verb for deleting
+coverage, and asking for one is refused by name and logged. A model outage never
+stops deterministic QA.
 
-Then watch it work:
+Every run leaves evidence: console, network, DOM and screenshots. A failure
+becomes a reproducible incident report with the run that produced it.
 
-```text
-loop: supervisor every 15m0s (model=zai/glm-5.3-flash dry_run=false max_actions=5)
-supervisor: discover_route "/app" applied (7 of 7 scenarios live on the entry
-            route; the interior is where the next coverage gap is)
-supervisor: 2 action(s) proposed, 2 applied, 0 refused, 2 gap(s) named
-supervisor: 6 new route(s) discovered (23 known)
-scenario home-deep-link-requires-auth: validation failed; agent fix attempt 1/3
-agent job 12: candidate teacher-home-dashboard → SOAK (validated by runner)
-```
-
-Within an hour of first launch against a real application, vigil discovered 23
-routes and authored 16 scenario candidates from a single seeded path — pinning
-one test identity so every scenario reproduces, filling forms where the flow
-allows it, and staying inside the host allowlist.
+Ship features wait for the deploy. A scenario re-runs once the shipped commit is
+actually served (asset-version gate), so "did the deploy break it?" has an answer
+minutes later.
 
 ## Safety rails
 
-The supervisor is deliberately the *weakest* actor in the system:
+The supervisor is the weakest actor in the system, on purpose:
 
 | Rail | Effect |
 |---|---|
 | Verb allowlist | 6 verbs only; `delete`/`retire`/`purge` refused **by name** and logged |
 | Host allowlist | An off-target URL is rejected outright, at harvest and at validation |
-| Deny path patterns | `logout`, `delete`, `purge`… are never explored — a wandering browser must not end its session or press something irreversible |
+| Deny path patterns | `logout`, `delete`, `purge`… are never explored. A wandering browser must not end its session or press something irreversible |
 | Mutation policy | `read-only` → `reversible` → `destructive` (off unless `policy.allow_destructive`) |
+| Human approval | A script from a queue feature reaches a schedule only after `vigil approve`. Until then it is never due |
+| Read-only environments | An environment with `read_only: true` refuses every scenario whose `mutation` is not `read-only` |
 | Budgets | Hourly task budgets per actor; the planner cannot starve discover/repair |
-| Active hours | A weekly window (e.g. weekdays 08:00–19:00) gates all cadence work, editable live from the dashboard |
+| Active hours | A weekly window (weekdays 08:00 to 19:00, say) gates all cadence work, editable live from the dashboard |
 | Quarantine guard | The one coverage-reducing verb is capped per plan and refused if it would blind an area completely |
-| Oracle policy | Observed behaviour either waits for a human (`needs_review`) or must survive validation + clean SOAK runs (`soak`) before it gates anything |
+| Oracle policy | Observed behaviour either waits for a human (`needs_review`) or must survive validation and clean SOAK runs (`soak`) before it gates anything |
 
 ## Quickstart
 
@@ -254,7 +237,7 @@ Then:
 | `incidents [--all] [--limit N]` | Open (or all) incidents with Markdown paths |
 | `findings [--all] [--limit N]` | Open (or all) data-analyst findings reported by the agent (`--limit` default 50) |
 | `findings resolve <id>` | Mark one finding RESOLVED |
-| `approve [--soak] <scenario>` | `PENDING_APPROVAL` to ACTIVE with `cadence: daily` (next due at `schedule.daily_at`, Jira comment on the source issue); every other approvable state — or `--soak` — to SOAK, counters reset, due now |
+| `approve [--soak] <scenario>` | `PENDING_APPROVAL` to ACTIVE with `cadence: daily` (next due at `schedule.daily_at`, Jira comment on the source issue); every other approvable state, or `--soak`, sends it to SOAK with counters reset, due now |
 | `reject <scenario>` | Any state to REJECTED; resolves its open APP_REGRESSION incidents |
 | `list [--state A,B]` | List scenarios, optionally filtered by comma-separated states |
 | `show <scenario>` | Current script YAML, coverage links, metrics, last 10 runs |
@@ -286,9 +269,9 @@ signature hash, exec key) and `details` (bounded to 8 KB: the description, the
 sample log lines, or the exec `details`). `scan` and `status` print KIND and REF
 next to the feature id.
 
-The Loki signature is the first match of `discovery.loki.signature` in the line —
-or, when a promtail line is itself JSON with a `message` key, in that message —
-normalised so one incident is one signature: URLs become `<url>`, UUIDs `<uuid>`,
+The Loki signature is the first match of `discovery.loki.signature` in the line,
+or, when a promtail line is itself JSON with a `message` key, in that message.
+vigil normalises it so one incident is one signature: URLs become `<url>`, UUIDs `<uuid>`,
 hex ids `<hex>`, numbers `#`, whitespace collapses, and the result is bounded to
 160 characters. Signatures are ranked by line count and the top
 `max_events_per_poll` become features.
@@ -330,13 +313,13 @@ wait for a human:
 | `disputed` | `판정 불일치` | `APP_FAILURE` but the agent disagrees (claims `reproduced: false`, or another step with no corroborating finding); `why` names the disagreement |
 | `unconfirmed` | `재현 안 됨` | `PASS` (the expected behaviour held), or no agent block to corroborate the failure |
 
-Because of that, the agent is told to assert **bounds** as booleans — `eval: {
+Because of that, the agent is told to assert bounds as booleans: `eval: {
 script: "…value.length <= 40", expect: true }`, `assert_count` with `max:`/`min:`
-over `equals:`, `assert_data` with `compare: number` against an API value — and
-to assert an exact value only when the specification fixes it.
+over `equals:`, `assert_data` with `compare: number` against an API value. It
+asserts an exact value only when the specification fixes it.
 
 `PENDING_APPROVAL` (Korean label `승인 대기`) is never due. Running such a script
-by hand — CLI or dashboard — records the run and its metrics and changes nothing
+by hand, from the CLI or the dashboard, records the run and its metrics and changes nothing
 else: no state transition, no incident, no repair job. That is on purpose: a
 reviewer can re-run a pending script as often as they like.
 
@@ -367,7 +350,7 @@ In the dashboard, `PENDING_APPROVAL` and `NEEDS_REVIEW` cards carry
 and a browser select (lightpanda / chromium), plus the reproduction badge
 (`재현됨` / `판정 불일치` / `재현 안 됨`, with `why` as its sub-line). They call `POST /api/script/{run,approve,reject}`, JSON
 in and out, same-origin only. `loop --ui` provides all three; standalone `serve`
-approves and rejects through the store but answers 409 for run — it has no
+approves and rejects through the store but answers 409 for run, because it has no
 scheduler.
 
 ## Environments
@@ -438,7 +421,7 @@ and deterministic QA continues (rule 12). An entry without `:thinking` inherits
 `model_attempts` (`{model, outcome}` per spawn; outcome `ok`, `unavailable`,
 `error`, `timeout`, `budget` or `no_result`). `vigil doctor` prints one line per
 chain entry from `pi auth check --provider <p> --json --no-refresh` and only
-*warns* when an entry is not ready — the chain skips it. Cooldowns live in
+only warns when an entry is not ready, because the chain skips it. Cooldowns live in
 memory, per process.
 
 ## Data checks and findings
@@ -461,10 +444,10 @@ UI text contains the API value. A mismatch is a business assertion, so it
 classifies as `APP_FAILURE` with both values and their sources in
 expected/actual. `assert_data` counts as a major action in the fingerprint.
 
-The Browser Agent has matching data-analyst duties — displayed values vs. the
+The Browser Agent has matching data-analyst duties: displayed values vs. the
 API payloads behind them, totals vs. row sums, counts vs. list lengths,
-dates/units/locale, empty vs. zero, stale data after an action — and reports each
-as a **finding**: `{kind: data_mismatch | domain_rule | display | accessibility,
+dates/units/locale, empty vs. zero, stale data after an action. It reports each
+one as a **finding**: `{kind: data_mismatch | domain_rule | display | accessibility,
 where, expected, actual, evidence}`. Findings are persisted (`findings` table,
 `OPEN` / `RESOLVED`), listed by `vigil findings [--all] [--limit N]`, closed with
 `vigil findings resolve <id>`, shown as a panel on the dashboard script detail
@@ -473,7 +456,7 @@ with a count on the verification page, and summarised in the approval comment.
 `agent.domain_file` (a markdown file, relative to the config, bounded to 12 KB
 and truncated with a marker) is injected into every task prompt as "Domain
 rules"; the agent must obey them and cite the rule id in a finding.
-`examples/domain.example.md` is a starting point — give every rule an id.
+`examples/domain.example.md` is a starting point. Give every rule an id.
 
 ## Playwright export
 
@@ -506,10 +489,10 @@ NEEDS_REVIEW script.
 | Locators | `test_id`→`getByTestId`, `role`→`getByRole(role,{name,exact})`, `label`→`getByLabel`/`getByPlaceholder`, `id`→`#id`, `text`→`getByText`, `href`→`locator('a[href*=..]')`, `css`→`locator`; `nth` → `.nth(n)` |
 | Scenario `assert` flags | listeners collected during the test (console errors, 5xx, 4xx on named URLs) and checked at the end |
 
-Anything the exporter cannot map exactly — a missing locator, an unknown `by`, a
-role `getByRole` does not know, an invalid timeout, an unsupported step kind or
-`compare` mode — becomes a `// TODO test.fixme:` comment next to the closest
-approximation. The output is always valid TypeScript.
+Anything the exporter cannot map exactly becomes a `// TODO test.fixme:` comment
+next to the closest approximation: a missing locator, an unknown `by`, a role
+`getByRole` does not know, an invalid timeout, an unsupported step kind, an
+unsupported `compare` mode. The output is always valid TypeScript.
 
 ## Config reference
 
@@ -693,7 +676,7 @@ Evidence never grows unbounded. Hourly (and at loop start) vigil applies: pass r
 
 `per-deploy` (default): after a scenario passes on Lightpanda, vigil runs it once more on Chromium for each new deployment marker so the verification report carries a real rendered screenshot (Lightpanda does not paint; its captures are text renderings). Background priority, one Chromium run per scenario per build. `off` disables it.
 
-This needs a deployment marker, and only `deployment.readiness.strategy: asset_version` produces one. Under the default `delay` strategy the marker is always empty, so the Chromium capture never runs and every screenshot stays a Lightpanda text rendering — `steps.json` records `capabilities.screenshot_painted: false` when that is the case.
+This needs a deployment marker, and only `deployment.readiness.strategy: asset_version` produces one. Under the default `delay` strategy the marker is always empty, so the Chromium capture never runs and every screenshot stays a Lightpanda text rendering. `steps.json` records `capabilities.screenshot_painted: false` when that is the case.
 
 ### personas / paths
 
@@ -934,6 +917,6 @@ Logs: `loop` writes to stdout and `<state dir>/vigil.log` (state dir is the dire
 | `evidence/` keeps growing | Prune runs hourly in `loop` only. Lower `retain_pass_days` / `retain_fail_days`, or delete old `runs/` and `agent/` dirs by hand; incidents are never pruned |
 | Agent jobs stall right after adding Jira/Loki sources | A backlog of issue/log features can spend `budget.agent_tasks_per_hour` in one tick; further features are deferred (unhandled) until the next hour. Raise the budget, narrow `discovery.jira.jql`, or raise `discovery.loki.min_count` |
 | `discovery.loki.base_url is required when the loki adapter is enabled` | The `${VAR}` in the config expanded to empty: export the Grafana variables in the shell that starts vigil (`${VAR}` substitution is silent about unset names) |
-| `scan` prints issue/log features but nothing happens | `scan` orchestrates without a Browser Agent, so queue features are deferred and stay unhandled (`feature ...: deferred, stays unhandled`). They are planned by the next process that has an agent — `loop`, or `vigil reproduce <feature>` for one of them |
+| `scan` prints issue/log features but nothing happens | `scan` orchestrates without a Browser Agent, so queue features are deferred and stay unhandled (`feature ...: deferred, stays unhandled`). They are planned by the next process that has an agent, either `loop` or `vigil reproduce <feature>` for one of them |
 | `vigil validate` warns `duplicate fingerprint` | Two files are the same logical scenario; prefer a variant or delete one |
 | `discover needs the Browser Agent` | `discover` runs the agent inline; fix the `doctor` agent checks first |

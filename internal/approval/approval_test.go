@@ -98,7 +98,7 @@ func TestApprovePendingBecomesDailyActiveAndComments(t *testing.T) {
 	if len(lines) > 12 {
 		t.Fatalf("body has %d lines:\n%s", len(lines), body)
 	}
-	for _, want := range []string{"[vigil] QA 스크립트 승인: entry-tabs v2 — 탭 중복 재현", "· 재현/회귀 실행: vigil run entry-tabs", "APP_FAILURE (dev, 2026-09-10 23:30 KST) — 재현됨",
+	for _, want := range []string{"[vigil] QA 스크립트 승인: entry-tabs v2, 탭 중복 재현", "· 재현/회귀 실행: vigil run entry-tabs", "APP_FAILURE (dev, 2026-09-10 23:30 KST), 재현됨",
 		"· 발견 사항: 0건", "· 일일 자동 실행: 매일 09:00 Asia/Seoul", "· 증거: evidence/runs/entry-tabs/x"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q:\n%s", want, body)
@@ -123,7 +123,7 @@ func TestApproveBodyAdvertisesReadOnlyEnv(t *testing.T) {
 	if _, err := svc.Approve(context.Background(), "s1", Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(fc.body, "· 운영 확인: vigil run s1 --env prod") || !strings.Contains(fc.body, "마지막 결과: 없음 — 재현 안 됨") {
+	if !strings.Contains(fc.body, "· 운영 확인: vigil run s1 --env prod") || !strings.Contains(fc.body, "마지막 결과: 없음, 재현 안 됨") {
 		t.Fatalf("body:\n%s", fc.body)
 	}
 }

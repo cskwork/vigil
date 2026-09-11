@@ -245,7 +245,7 @@ visited_urls: ["https://...", "..."]
 ephemeral: false              # true when the behavior is temporary/exploratory and must not be persisted
 findings:                     # optional: data-analyst observations, one per discrepancy
   - kind: data_mismatch       # data_mismatch | domain_rule | display | accessibility
-    where: "https://host/students — card '전체 학생'"
+    where: "https://host/students, card '전체 학생'"
     expected: "api /api/students $.data.totalCount = 42"
     actual: "ui .total-count = 41"
     evidence: "GET /api/students → {\"totalCount\":42,...}; step-3.png; rule DATA-1"

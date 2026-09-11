@@ -264,7 +264,7 @@ func (a *app) reproduceDryRun(ctx context.Context, f *model.Feature) error {
 	if a.jsonOut {
 		return a.printJSON(map[string]any{"feature_id": f.ID, "dry_run": true, "dir": dir, "request": req})
 	}
-	a.printf("dry-run: reproduce %s (%s %s) — model not called\n  request: %s\n  prompt:  %s\n%s",
+	a.printf("dry-run: reproduce %s (%s %s), model not called\n  request: %s\n  prompt:  %s\n%s",
 		f.ID, orDefault(f.Kind, "item"), orDefault(f.Ref, f.ID), filepath.Join(dir, agent.FileRequest), filepath.Join(dir, agent.FileTask), b)
 	return nil
 }

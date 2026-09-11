@@ -1,6 +1,6 @@
-# PRD — vigil
+# vigil PRD
 
-**Version:** 0.4 — Final Lean Architecture  
+**Version:** 0.4, final lean architecture  
 **Status:** Implementation-ready  
 **Purpose:** Portable continuous QA for already-deployed web applications
 
@@ -838,7 +838,7 @@ The same contracts run in two modes.
 single vigil process
 SQLite WAL
 local evidence
-1–4 Lightpanda workers
+1 to 4 Lightpanda workers
 Chromium on demand
 ```
 
@@ -1078,7 +1078,7 @@ workers:
 
 ## 21. Implementation
 
-### Phase 1 — lean local product
+### Phase 1: lean local product
 
 Build:
 
@@ -1113,7 +1113,7 @@ ship
 → impacted old scripts continue running
 ```
 
-### Phase 2 — scale without redesign
+### Phase 2: scale without redesign
 
 Add:
 
@@ -1128,7 +1128,7 @@ project fairness/backpressure
 optional Browser Agent worker pool
 ```
 
-### Phase 3 — only after measured need
+### Phase 3: only after measured need
 
 Consider:
 

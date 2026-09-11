@@ -934,7 +934,7 @@ func TestBrokenScenarioBacksOffInsteadOfHotLooping(t *testing.T) {
 }
 
 // Some origins answer GET immediately but never complete a HEAD. The probe used HEAD, so it
-// timed out and reported an unhealthy target for a site that was serving fine — and that
+// timed out and reported an unhealthy target for a site that was serving fine, and that
 // verdict is what decides whether a failing script is drift worth repairing.
 func TestProbeTargetSurvivesAnOriginThatIgnoresHead(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

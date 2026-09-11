@@ -139,7 +139,7 @@ func assertPlain(t *testing.T, h string) {
 	if n := strings.Count(h, "다."); n > 1 {
 		t.Errorf("headline has more than one sentence: %q", h)
 	}
-	for _, bad := range []string{"—", "assert", "locate", "role=", "by=", "css", "0 matches", "candidates(", "step ", "nth=", "$."} {
+	for _, bad := range []string{"\u2014", "assert", "locate", "role=", "by=", "css", "0 matches", "candidates(", "step ", "nth=", "$."} {
 		if strings.Contains(h, bad) {
 			t.Errorf("headline contains %q: %q", bad, h)
 		}

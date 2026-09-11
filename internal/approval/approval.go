@@ -303,7 +303,7 @@ func (s *Service) Body(ctx context.Context, sc *model.Scenario, now time.Time) s
 		title = sc.ID
 	}
 	lines := []string{
-		fmt.Sprintf("[vigil] QA 스크립트 승인: %s v%d — %s", sc.ID, max(sc.CurrentVersion, 1), title),
+		fmt.Sprintf("[vigil] QA 스크립트 승인: %s v%d, %s", sc.ID, max(sc.CurrentVersion, 1), title),
 		fmt.Sprintf("· 재현/회귀 실행: vigil run %s", sc.ID),
 	}
 	if ro := s.readOnlyEnv(); ro != "" {
@@ -338,7 +338,7 @@ func (s *Service) Body(ctx context.Context, sc *model.Scenario, now time.Time) s
 		}
 	}
 	findings, _ := s.St.ListOpenFindingsFor(ctx, s.Cfg.Project.ID, sc.ID, sc.OracleFeature)
-	lastLine := fmt.Sprintf("· 마지막 결과: %s — %s", last, verdict)
+	lastLine := fmt.Sprintf("· 마지막 결과: %s, %s", last, verdict)
 	if cause != "" {
 		lastLine += " / " + cause
 	}

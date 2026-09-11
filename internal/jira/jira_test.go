@@ -25,7 +25,7 @@ func fakeClient(t *testing.T, loseWrite bool) (*Client, string) {
 	return &Client{CLI: cli}, filepath.Join(dir, "argv.log")
 }
 
-const body = "[vigil] QA 스크립트 승인: entry-tabs v2 — 탭 중복\n· 재현/회귀 실행: vigil run entry-tabs\n· 증거: evidence/runs/entry-tabs"
+const body = "[vigil] QA 스크립트 승인: entry-tabs v2, 탭 중복\n· 재현/회귀 실행: vigil run entry-tabs\n· 증거: evidence/runs/entry-tabs"
 
 func TestCommentCreatesAndVerifies(t *testing.T) {
 	c, logPath := fakeClient(t, false)
