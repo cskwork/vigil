@@ -301,7 +301,9 @@ async function scriptAction(kind, s, extra) {
     receipts[s.id] = errHTML(e);
     toast(e.message || '요청을 처리하지 못했습니다.');
   }
-  poll.refresh(); // re-read state and next due from the server
+  // 서버에서 상태와 다음 차례를 다시 읽습니다. 기다리지 않으면 뒤늦게 도착한 응답이
+  // 목록을 다시 그리면서 아래에서 잡아 둔 포커스를 지웁니다.
+  await poll.refresh();
   render();
   // 누른 버튼은 재렌더로 사라졌습니다. 다음 건으로 이어 가도록 자리를 잡아 줍니다.
   focusAfterAction(s.id, idx);
@@ -395,7 +397,7 @@ function revealDetail(d, s) {
   if (!target) return;
   target.tabIndex = -1;
   target.focus({ preventScroll: true });
-  target.scrollIntoView({ block: 'start' });
+  claimScroll(target, { block: 'start' });
 }
 
 // ---- findings (data-analyst observations from the Browser Agent) ------------
