@@ -13,7 +13,7 @@
 
 ## 합성 검증 환경
 
-- 별도 MySQL 8.4.11 인스턴스: `127.0.0.1:13317`, 임시 디렉터리의 새 데이터베이스 `proofqa_demo`.
+- 별도 MySQL 인스턴스: `127.0.0.1:13317`, 임시 디렉터리의 새 데이터베이스 `proofqa_demo`. 최초 검증은 8.4.11, 최종 한 사용자 재검증은 격리한 8.0.36 컨테이너에서 수행했다.
 - fixture 계정과 `SELECT`만 허용한 probe 계정을 분리했다. `SHOW GRANTS FOR CURRENT_USER()`로 probe 권한을 확인했다.
 - 브라우저 검증: Ego Lite에서 ProofQA 웹을 조작하고, ProofQA runner는 별도로 소유한 Chromium을 실행한다.
 - 실행 전 `vigil-chromium-*` 프로필을 사용하는 Chrome 프로세스는 0개였다.
@@ -41,11 +41,11 @@ Check → 수정 가능한 Contract → 일회 승인 → Attempt → 항목별 
 | 승인 범위 밖 요청 차단 | redirect 및 비허용 origin 반례 | 실제 Chromium에서 허용 origin의 302를 따라가는 금지 origin 요청 0회, UNKNOWN과 차단 사유, owned browser 종료 확인 |
 | 취소·재시작 시 쓰기 재전송 없음 | 중단 journal, 재시작 상태, owned browser 종료 | 실제 취소와 SIGKILL 뒤 복구 통과. 재실행 0, 남은 Chromium·시도 잠금 0 |
 | 승인에 정기 실행 부수효과 없음 | proof jobs와 legacy schedule/approval 경계 테스트 | 실행 DB에는 PROOF_PLAN/PROOF_RUN만 존재. scenario/feature/incident 생성 0 |
-| 인증·증거 접근 제어 | 인증 누락, 다른 사용자, CSRF, 경로 탈출 반례 | 고정 gateway 주체·토큰·CSRF·manifest·만료 경계 자동 테스트 통과. 조직 사용자별 권한은 미검증 |
-| 요청부터 결과까지 사용할 수 있음 | 실제 브라우저 생성·승인·재조회·재실행·복사, desktop/mobile | Ego에서 실제 흐름 통과. 독립 Chromium의 1280×900 및 390×844 화면·대비·버튼 크기·가로 넘침 검사 통과 |
+| 인증·증거 접근 제어 | 인증 누락, 세션·CSRF, 경로 탈출 반례 | 한 사용자 쿠키 로그인과 고정 gateway 주체·토큰·CSRF·manifest·만료 경계 자동 테스트 통과. 조직 SSO는 미검증 |
+| 요청부터 결과까지 사용할 수 있음 | 실제 브라우저 생성·승인·재조회·재실행·복사, 반응형 화면 | Ego에서 한 사용자 흐름 통과. 관리자형 UI를 독립 Chromium의 desktop/tablet/mobile/mobile-dark로 검사했고, 가로 넘침 없음·최소 버튼 높이 47.6px·검사 텍스트 대비 4.5:1 이상 |
 | 수정 전후 비교를 과장하지 않음 | baseline 조건, 버전 누락·변경·만료 반례 | 실제 A의 FAIL → C의 PASS 비교 통과. 버전 변경·부적합 baseline 거절 자동 테스트 통과 |
 | 실제 업무 환경에서 동작 | 운영자가 승인한 QA URL·계정·DB에서 실행 | Not proven. 연결 정보 필요 |
-| 처음 사용자 5명 중 4명 성공 | 5명의 독립 첫 사용 관찰 | Not proven. 참가자 필요 |
+| 한 사용자가 기획·QA·개발 확인 완료 | 요청·기준 수정·실행·근거·판단·재검증 | 합성 환경에서 한 계정으로 로그인·요청·승인·재실행·결과 복사·판단 저장·새로고침 후 유지까지 통과. 사용자가 2026-09-12에 1명 기준으로 변경 |
 
 ## 필수 반례 추적
 
@@ -73,11 +73,11 @@ Check → 수정 가능한 Contract → 일회 승인 → Attempt → 항목별 
 | 저장 전 취소 | `086ccd99c61ef1d7ffc0349f621e71b1` | 미완료 | CANCELLED / INCOMPLETE, 값 0 유지 |
 | 서버 강제 종료 후 복구 | `6115bf62cbf712ffbd86b0abef6fdf2d` | 미완료 | INTERRUPTED / INCOMPLETE, 쓰기 재전송 0 |
 
-최종 브라우저 사용 흐름의 Check는 `9750a6ba622d6608980905ff16422d6a`다. 입력 후 기준 생성·실행 버튼으로 `587e10acf4fbdf5b69192e662dda203e`가 생성됐고, 새로고침해도 같은 attempt가 유지됐다. 같은 기준 재실행은 `1986bacb2e94196f40910f3ecbd2eac3`를 생성했다. 두 실행 모두 PASS이며 결과 복사도 완료됐다. 재실행 버튼의 첫 자동 조작은 드라이버의 pointer interception 오류로 다시 관찰한 후 재시도했다. 이를 사용자 최초 성공률 측정으로 집계하지 않는다.
+최종 한 사용자 브라우저 흐름의 Check는 `ae3b3d993a08f7a8b9f80e8d3c699b23`다. 로그인한 `operator` 계정이 기준을 확인하고 재실행한 Attempt `62589c4fabae553ec7cb72fbd93e9be3`은 UI/API/DB가 모두 PASS였다. 결과를 복사하고 `확인 완료` 판단과 사유를 저장했으며, 새로고침 뒤 기술 판정과 사람 판단이 각각 유지되는 것을 확인했다. 먼저 샌드박스에서 시작한 Attempt `a8778cc3c03e98b8e0077ff2914df019`은 Chromium 권한 오류를 업무 실패로 바꾸지 않고 INCOMPLETE로 남겼다.
 
-SQLite backup API로 실행 DB의 별도 사본을 만들었고 `PRAGMA integrity_check`는 `ok`였다. 마지막 프로세스 검사에서도 `vigil-chromium-*` 프로필을 쓰는 Chrome 프로세스는 0개였다. peak RSS의 연속 측정과 24개 균형 평가 세트는 수행하지 않았으므로 성능·일반 정확도 주장을 하지 않는다.
+SQLite backup API로 실행 DB의 별도 사본을 만들었고 `PRAGMA integrity_check`는 `ok`였다. 마지막 프로세스 검사에서도 `vigil-chromium-*` 프로필을 쓰는 Chrome 프로세스는 0개였다. 최종 redirect 차단 E2E에서 10ms 간격으로 읽은 소유 Chromium 주 프로세스의 표본 peak RSS는 95,920KiB였다. 하위 프로세스를 모두 합친 장기 성능 측정은 아니다. 정상 8개, 업무 오류 8개, 근거 부족 8개의 24개 판정 세트는 코드 판정 수준에서 통과했다. 실제 서비스 24개를 실행한 결과나 일반 정확도는 아니다.
 
-리다이렉트 반례는 `PROOF_BROWSER_E2E=1 go test ./internal/proof -run TestProofBrowserRejectsRedirectOutsideScope -count=1 -v`로 재실행할 수 있다. 테스트가 독립 서버 두 개와 SQLite, Chromium을 만들고 정리하며 회사 서비스나 사용자 브라우저를 사용하지 않는다.
+브라우저 경계 반례는 `PROOF_BROWSER_E2E=1 go test ./internal/proof -run 'TestProofBrowserRejectsRedirectOutsideScope|TestPlanObservationBlocksExternalRequestsAndCleansBrowser|TestRegisteredDirectReadUsesApprovedBrowserSession' -count=1 -v`로 재실행할 수 있다. 테스트가 독립 서버와 SQLite, Chromium을 만들고 정리하며 회사 서비스나 사용자 브라우저를 사용하지 않는다. 실행 redirect와 승인 전 화면 관찰 모두 금지 origin 요청이 0건이었고 소유 Chromium과 journal이 남지 않았다. UI에서 재조회가 없는 경우에도 등록된 GET만 같은 세션에서 실행해 실제 PASS 근거를 만들었다.
 
 로컬 검증 영수증과 최종 화면은 `.vigil/proofqa-acceptance-20260912/`에 보존했다. 이 디렉터리는 git에서 제외되며 위 표와 자동 테스트 소스가 저장소에 남는 검증 기록이다.
 
@@ -85,6 +85,6 @@ SQLite backup API로 실행 DB의 별도 사본을 만들었고 `PRAGMA integrit
 
 Pi에 등록된 `openai-codex/gpt-6-astra`로 동일 합성 요청을 3번 계획했다. 세 번 모두 유효한 계약을 만들지 못했다. 같은 제한 옵션의 최소 입력으로 확인한 제공자 오류는 `Codex error: The usage limit has been reached`였다. 모델 사용량은 해당 오류 응답에서 0으로 보고됐다. 사용 한도 오류를 UI에 구분해 표시하는 파서는 이 실제 응답 형태로 자동 테스트했다. 실제 모델의 성공률·기준 생성 편차는 **Not proven**이며 한도가 회복된 뒤 다시 평가해야 한다.
 
-현재 구현은 운영자가 등록한 DOM/API/DB 흐름에 한정한다. 새 화면의 자동 브라우저 탐색, iframe/popup 흐름, 조직별 다중 사용자 로그인은 제공하지 않는다. 고정된 게이트웨이 주체를 사용하는 인증 경계와 단일 로컬 운영자 경계는 구현했지만 공개 인터넷 운영이나 조직 SSO 검증을 대신하지 않는다. 실제 업무 환경 연결과 5명의 첫 사용 관찰은 사용자 선택에 따라 후속으로 남겼다.
+현재 구현은 운영자가 등록한 DOM/API/DB 흐름에 한정한다. iframe/popup 흐름과 조직별 역할 관리는 제공하지 않는다. 한 사용자의 쿠키 로그인, 고정된 게이트웨이 주체와 단일 로컬 운영자 경계는 구현했지만 공개 인터넷 운영이나 조직 SSO 검증을 대신하지 않는다. 실제 업무 환경 연결은 사용자 선택에 따라 후속으로 남겼다.
 
 이 문서는 커밋·푸시 전후의 검증 근거를 함께 기록한다. 공개 배포는 수행하지 않았다. 실행 방법과 제약은 [ProofQA 실행 안내](proofqa.md)를 참고한다.

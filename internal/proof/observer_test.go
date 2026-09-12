@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/chromedp/cdproto/network"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -48,13 +49,22 @@ func TestRereadRequiresSuccessfulWriteResponseBeforeRead(t *testing.T) {
 		t.Fatal(reason)
 	}
 	start := o.actionTimes["save"]
-	o.responses["write"] = &response{URL: "http://qa.test/record", Method: "POST", Sent: start.Add(10 * time.Millisecond), Received: start.Add(50 * time.Millisecond), Status: 200, Body: []byte(`{"success":true}`)}
+	o.responses["write"] = &response{URL: "http://qa.test/record", Method: "POST", Sent: start.Add(10 * time.Millisecond), Received: start.Add(50 * time.Millisecond), Status: 200, Body: []byte(`{"success":true,"entity":"qa-1","generation":"generation"}`)}
 	if _, reason, _ := o.networkValue(context.Background(), ob); reason != "" {
 		t.Fatal(reason)
 	}
 	o.responses["write"].Received = start.Add(150 * time.Millisecond)
 	if _, reason, _ := o.networkValue(context.Background(), ob); reason != "save response before reread not established" {
 		t.Fatal("stale read accepted", reason)
+	}
+	o.responses["write"].Received = start.Add(50 * time.Millisecond)
+	o.responses["write"].Body = []byte(`{"success":true,"entity":"other","generation":"generation"}`)
+	if _, reason, _ := o.networkValue(context.Background(), ob); reason != "save response belongs to another entity" {
+		t.Fatal(reason)
+	}
+	o.responses["write"].Body = []byte(`{"success":true,"entity":"qa-1","generation":"old"}`)
+	if _, reason, _ := o.networkValue(context.Background(), ob); reason != "save response belongs to another fixture generation" {
+		t.Fatal(reason)
 	}
 }
 func TestPreActionResponseCannotEstablishExpectedValue(t *testing.T) {
@@ -63,5 +73,13 @@ func TestPreActionResponseCannotEstablishExpectedValue(t *testing.T) {
 	_, reason, _ := o.networkValue(context.Background(), ob)
 	if reason != "correlated response missing" {
 		t.Fatal(reason)
+	}
+}
+
+func TestNetworkObserverRejectsNonSuccessHTTPStatus(t *testing.T) {
+	o, observer := networkObservation()
+	o.responses["read"].Status = http.StatusNotFound
+	if _, reason, _ := o.networkValue(context.Background(), observer); reason != "network evidence unavailable" {
+		t.Fatalf("HTTP 404 evidence reason=%q", reason)
 	}
 }

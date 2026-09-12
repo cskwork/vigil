@@ -33,10 +33,10 @@ func (s *Service) Prune(ctx context.Context) error {
 	for _, a := range list {
 		for _, cr := range a.Results {
 			for _, ev := range cr.Evidence {
-				if (ev.Artifact == "" && ev.Screenshot == "") || time.Since(ev.At) <= s.RawRetention {
+				if (ev.Artifact == "" && ev.Screenshot == "" && ev.BeforeScreenshot == "") || time.Since(ev.At) <= s.RawRetention {
 					continue
 				}
-				for _, name := range []string{ev.Artifact, ev.Screenshot} {
+				for _, name := range []string{ev.Artifact, ev.Screenshot, ev.BeforeScreenshot} {
 					if name == "" {
 						continue
 					}

@@ -51,6 +51,7 @@ func Equal(a, b Value) bool {
 }
 
 type Criterion struct {
+	Proposed  bool   `json:"proposed,omitempty"`
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Required  bool   `json:"required"`
@@ -94,6 +95,7 @@ type ScopeRule struct {
 	Query  map[string]string `json:"query,omitempty"`
 }
 type Observer struct {
+	Compare        string     `json:"compare,omitempty"`
 	WriteAPI       *ScopeRule `json:"write_api,omitempty"`
 	EntityPath     string     `json:"entity_path,omitempty"`
 	GenerationPath string     `json:"generation_path,omitempty"`
@@ -107,6 +109,7 @@ type Observer struct {
 	SuccessPath string     `json:"success_path,omitempty"`
 	Success     Value      `json:"success,omitempty"`
 	Reread      bool       `json:"reread,omitempty"`
+	DirectRead  bool       `json:"direct_read,omitempty"`
 	Probe       string     `json:"probe,omitempty"`
 }
 type Definition struct {
@@ -114,6 +117,7 @@ type Definition struct {
 	Title    string `json:"title"`
 }
 type Target struct {
+	Teams           []string  `json:"teams,omitempty"`
 	RegistryHash    string    `json:"registry_hash,omitempty"`
 	Template        *Contract `json:"template,omitempty"`
 	VersionSelector string    `json:"version_selector,omitempty"`
@@ -137,9 +141,14 @@ type Registry struct {
 	Probes    map[string]Probe  `json:"probes,omitempty"`
 }
 type Check struct {
-	LatestVerdict   string     `json:"latest_verdict,omitempty"`
-	MissingCount    int        `json:"missing_count"`
-	RevisionHistory []Revision `json:"revision_history,omitempty"`
+	PlanObservation PlanObservation `json:"plan_observation,omitempty"`
+	Question        string          `json:"question,omitempty"`
+	Clarifications  []string        `json:"clarifications,omitempty"`
+	Team            string          `json:"team,omitempty"`
+	IntakeKey       string          `json:"intake_key,omitempty"`
+	LatestVerdict   string          `json:"latest_verdict,omitempty"`
+	MissingCount    int             `json:"missing_count"`
+	RevisionHistory []Revision      `json:"revision_history,omitempty"`
 
 	ID              string          `json:"id"`
 	TargetRef       string          `json:"target_ref"`
@@ -150,9 +159,24 @@ type Check struct {
 	CreatedBy       string          `json:"created_by"`
 	RowVersion      int             `json:"row_version"`
 	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 	Planning        string          `json:"planning"`
 	Suggestions     json.RawMessage `json:"suggestions,omitempty"`
 	PlanError       string          `json:"plan_error,omitempty"`
+}
+type PlanControl struct {
+	Tag    string `json:"tag"`
+	Role   string `json:"role,omitempty"`
+	Type   string `json:"type,omitempty"`
+	Name   string `json:"name,omitempty"`
+	TestID string `json:"test_id,omitempty"`
+}
+type PlanObservation struct {
+	URL        string        `json:"url,omitempty"`
+	Status     string        `json:"status,omitempty"`
+	Controls   []PlanControl `json:"controls,omitempty"`
+	ObservedAt time.Time     `json:"observed_at,omitempty"`
+	Note       string        `json:"note,omitempty"`
 }
 type Approval struct {
 	RegistryHash   string `json:"registry_hash"`
@@ -163,8 +187,9 @@ type Approval struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 type Evidence struct {
-	Screenshot   string `json:"screenshot,omitempty"`
-	Availability string `json:"availability,omitempty"`
+	Screenshot       string `json:"screenshot,omitempty"`
+	BeforeScreenshot string `json:"before_screenshot,omitempty"`
+	Availability     string `json:"availability,omitempty"`
 
 	Details json.RawMessage `json:"details,omitempty"`
 
@@ -180,6 +205,14 @@ type Evidence struct {
 	Status    string    `json:"status"`
 	Reason    string    `json:"reason,omitempty"`
 	Artifact  string    `json:"artifact,omitempty"`
+}
+type ActionEvent struct {
+	Action     string     `json:"action"`
+	Title      string     `json:"title"`
+	Step       int        `json:"step"`
+	State      string     `json:"state"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 type CriterionResult struct {
 	ID       string     `json:"id"`
@@ -201,6 +234,7 @@ type DispositionEvent struct {
 	Reason      string    `json:"reason"`
 }
 type Attempt struct {
+	ActionJournal      []ActionEvent      `json:"action_journal,omitempty"`
 	DispositionHistory []DispositionEvent `json:"disposition_history,omitempty"`
 
 	PlanHash          string `json:"plan_hash"`
@@ -335,8 +369,12 @@ func Allowed(raw, method string, rules []ScopeRule) bool {
 	if e != nil || u.User != nil || u.Fragment != "" {
 		return false
 	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
 	for _, r := range rules {
-		if u.Scheme+"://"+u.Host != r.Origin || method != r.Method || u.EscapedPath() != r.Path {
+		if u.Scheme+"://"+u.Host != r.Origin || method != r.Method || path != r.Path {
 			continue
 		}
 		q := u.Query()

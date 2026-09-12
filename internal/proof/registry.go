@@ -7,6 +7,18 @@ import (
 	"vigil/internal/dsl"
 )
 
+func scopeURL(rule ScopeRule) string {
+	raw := rule.Origin + rule.Path
+	if len(rule.Query) == 0 {
+		return raw
+	}
+	q := url.Values{}
+	for key, value := range rule.Query {
+		q.Set(key, value)
+	}
+	return raw + "?" + q.Encode()
+}
+
 func (r Registry) Validate() error {
 	if len(r.Targets) == 0 {
 		return fmt.Errorf("at least one registered target required")
@@ -18,6 +30,9 @@ func (r Registry) Validate() error {
 		}
 		if t.Environment == "" || t.PolicyVersion == "" {
 			return fmt.Errorf("target environment and policy_version required")
+		}
+		if !Allowed(t.BaseURL, "GET", t.Scope) {
+			return fmt.Errorf("target base URL must be an approved GET")
 		}
 		for _, rule := range t.Scope {
 			origin, e := url.Parse(rule.Origin)
@@ -61,17 +76,16 @@ func (r Registry) Validate() error {
 				return fmt.Errorf("observer action unavailable")
 			}
 			if o.API != nil {
-				raw := o.API.Origin + o.API.Path
-				if len(o.API.Query) > 0 {
-					q := url.Values{}
-					for k, v := range o.API.Query {
-						q.Set(k, v)
-					}
-					raw += "?" + q.Encode()
-				}
+				raw := scopeURL(*o.API)
 				if !Allowed(raw, o.API.Method, t.Scope) {
 					return fmt.Errorf("observer network scope unapproved")
 				}
+			}
+			if o.DirectRead && (o.Kind != "network" || o.API == nil || o.API.Method != "GET" || !o.Reread) {
+				return fmt.Errorf("direct observer reads require a registered GET reread")
+			}
+			if o.Kind == "mysql" && o.Compare != "" && o.Compare != "unchanged" && o.Compare != "preserves" {
+				return fmt.Errorf("mysql observer comparison must be unchanged or preserves")
 			}
 		}
 	}

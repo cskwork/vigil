@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"vigil/internal/store"
@@ -52,6 +53,18 @@ func TestTypedExpectedAndVerdict(t *testing.T) {
 		if got := Verdict(c.r); got != c.want {
 			t.Fatalf("%s != %s", got, c.want)
 		}
+	}
+}
+
+func TestRequiredCriterionRemovalIncludesOptionalDowngrade(t *testing.T) {
+	before := contract()
+	after := contract()
+	after.Criteria[0].Required = false
+	if !requiredCriteriaRemoved(before, after) {
+		t.Fatal("required criterion downgrade did not require a reason")
+	}
+	if requiredCriteriaRemoved(before, before) {
+		t.Fatal("unchanged required criterion was treated as removed")
 	}
 }
 func TestAtomicApprovalIdempotencyImmutableAndLegacyIsolation(t *testing.T) {
@@ -99,6 +112,80 @@ func TestAtomicApprovalIdempotencyImmutableAndLegacyIsolation(t *testing.T) {
 	saved, _ := r.Attempt(ctx, a.ID)
 	if saved.Verdict != "FAIL" {
 		t.Fatal("disposition changed verdict")
+	}
+}
+
+func TestConcurrentIntakeAndAttemptIdempotencyCreateOneJobEach(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	st, repo := setup(t)
+	type checkResult struct {
+		check *Check
+		err   error
+	}
+	checks := make(chan checkResult, 2)
+	var group sync.WaitGroup
+	for range 2 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			check, err := repo.Create(ctx, "qa", "zero", "operator", "owner", "same-intake")
+			checks <- checkResult{check, err}
+		}()
+	}
+	group.Wait()
+	close(checks)
+	var check *Check
+	for result := range checks {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if check == nil {
+			check = result.check
+		} else if check.ID != result.check.ID {
+			t.Fatalf("duplicate checks: %s %s", check.ID, result.check.ID)
+		}
+	}
+	check, err := repo.Patch(ctx, check.ID, check.RowVersion, contract())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ap := Approval{RegistryHash: Hash(testRegistry().Targets["qa"]), Revision: check.CurrentRevision, ContractHash: check.ContractHash, Scope: "qa", IdempotencyKey: "same-attempt"}
+	type attemptResult struct {
+		attempt *Attempt
+		err     error
+	}
+	attempts := make(chan attemptResult, 2)
+	for range 2 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			attempt, _, err := repo.Approve(ctx, check.ID, ap, "operator", testRegistry())
+			attempts <- attemptResult{attempt, err}
+		}()
+	}
+	group.Wait()
+	close(attempts)
+	var attempt *Attempt
+	for result := range attempts {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if attempt == nil {
+			attempt = result.attempt
+		} else if attempt.ID != result.attempt.ID {
+			t.Fatalf("duplicate attempts: %s %s", attempt.ID, result.attempt.ID)
+		}
+	}
+	var planJobs, runJobs int
+	if err = st.DB().QueryRow(`SELECT count(*) FROM jobs WHERE kind='PROOF_PLAN'`).Scan(&planJobs); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT count(*) FROM jobs WHERE kind='PROOF_RUN'`).Scan(&runJobs); err != nil {
+		t.Fatal(err)
+	}
+	if planJobs != 1 || runJobs != 1 {
+		t.Fatalf("jobs: plan=%d run=%d", planJobs, runJobs)
 	}
 }
 func TestScopeExactQueryAndCompiler(t *testing.T) {

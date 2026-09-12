@@ -17,6 +17,8 @@ import (
 // HTTPConfig uses an explicit loopback operator or a gateway bearer secret.
 // Gateway access requires a fixed authenticated actor, never client identity headers.
 type HTTPConfig struct {
+	Users         []LoginUser
+	PublicOrigin  string
 	LocalOperator bool
 	GatewayToken  string
 	GatewayActor  string
@@ -24,7 +26,11 @@ type HTTPConfig struct {
 }
 
 func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
-	if !cfg.LocalOperator && (len(cfg.GatewayToken) < 32 || cfg.GatewayActor == "") {
+	auth, err := newSessionAuth(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if auth == nil && !cfg.LocalOperator && (len(cfg.GatewayToken) < 32 || cfg.GatewayActor == "") {
 		return nil, fmt.Errorf("external proof access requires a gateway token and authenticated actor")
 	}
 	csrf := id()
@@ -38,6 +44,12 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 			return
 		}
 		json.NewEncoder(w).Encode(v)
+	}
+	replyStatus := func(w http.ResponseWriter, r *http.Request, status int, v any) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `"`+Hash(v)+`"`)
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(v)
 	}
 	fail := func(w http.ResponseWriter, e error) {
 		status := 422
@@ -73,17 +85,30 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 		actor = cfg.GatewayActor
 	}
 	mux.HandleFunc("GET /api/proof/session", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, r, map[string]string{"actor": actor, "csrf": csrf})
+		p := identity(r, actor)
+		token := csrf
+		if p.CSRF != "" {
+			token = p.CSRF
+		}
+		if auth == nil {
+			reply(w, r, map[string]string{"actor": p.Actor, "csrf": token})
+			return
+		}
+		reply(w, r, map[string]any{"actor": p.Actor, "team": p.Team, "csrf": token, "login": auth != nil})
 	})
 	mux.HandleFunc("GET /api/proof/registry", func(w http.ResponseWriter, r *http.Request) {
 		targets := map[string]Target{}
 		for k, t := range s.Registry.Targets {
+			if !teamAllowed(t, identity(r, actor).Team) {
+				continue
+			}
 			registryHash := Hash(t)
 			b, _ := json.Marshal(t)
 			var copy Target
 			json.Unmarshal(b, &copy)
 			for id, p := range copy.Personas {
 				p.Secrets = nil
+				p.Setup = nil
 				copy.Personas[id] = p
 			}
 			copy.RegistryHash = registryHash
@@ -93,31 +118,54 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 	})
 	mux.HandleFunc("POST /api/proof/checks", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			TargetRef string `json:"target_ref"`
-			Request   string `json:"request"`
+			TargetRef      string `json:"target_ref"`
+			Request        string `json:"request"`
+			URL            string `json:"url,omitempty"`
+			IdempotencyKey string `json:"idempotency_key,omitempty"`
 		}
 		if !decode(w, r, &in) {
 			return
 		}
-		if _, ok := s.Registry.Targets[in.TargetRef]; !ok {
+		if in.TargetRef == "" && in.URL != "" {
+			for key, t := range s.Registry.Targets {
+				if in.URL == t.BaseURL {
+					in.TargetRef = key
+					break
+				}
+			}
+		}
+		target, ok := s.Registry.Targets[in.TargetRef]
+		if !ok {
 			fail(w, fmt.Errorf("unknown registered target"))
 			return
 		}
-		if len(strings.TrimSpace(in.Request)) < 3 || len(in.Request) > 10000 {
-			fail(w, fmt.Errorf("request must contain 3 to 10000 characters"))
+		if in.URL != "" && in.URL != target.BaseURL {
+			apiError(w, http.StatusUnprocessableEntity, "이 주소는 아직 확인 대상으로 등록되지 않았습니다.")
 			return
 		}
-		c, e := s.Repo.Create(r.Context(), in.TargetRef, in.Request, actor)
+		p := identity(r, actor)
+		if !teamAllowed(target, p.Team) {
+			apiError(w, 403, "이 대상을 확인할 권한이 없습니다.")
+			return
+		}
+		if len(strings.TrimSpace(in.Request)) < 3 || len(in.Request) > 10000 {
+			apiError(w, http.StatusBadRequest, "확인할 내용은 3자 이상 10,000자 이하로 적어 주세요.")
+			return
+		}
+		if len(in.IdempotencyKey) > 128 {
+			apiError(w, http.StatusBadRequest, "중복 방지 키가 너무 깁니다.")
+			return
+		}
+		c, e := s.Repo.Create(r.Context(), in.TargetRef, in.Request, p.Actor, p.Team, in.IdempotencyKey)
 		if e != nil {
 			fail(w, e)
 			return
 		}
 		s.Wake()
-		w.WriteHeader(201)
-		reply(w, r, c)
+		replyStatus(w, r, http.StatusCreated, c)
 	})
 	mux.HandleFunc("GET /api/proof/checks", func(w http.ResponseWriter, r *http.Request) {
-		cs, e := s.Repo.List(r.Context(), r.URL.Query().Get("cursor"))
+		cs, e := s.Repo.List(r.Context(), r.URL.Query().Get("cursor"), identity(r, actor).Team)
 		if e != nil {
 			fail(w, e)
 			return
@@ -159,29 +207,35 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 			fail(w, e)
 			return
 		}
-		if _, e = s.Registry.Compile(c.TargetRef, in.Contract, c.Request); e != nil {
+		if _, e = s.Registry.Compile(c.TargetRef, in.Contract, sourceText(*c)); e != nil {
 			fail(w, e)
 			return
 		}
-		removed := false
-		ids := map[string]bool{}
-		for _, cr := range in.Contract.Criteria {
-			ids[cr.ID] = true
-		}
-		for _, cr := range c.Draft.Criteria {
-			if cr.Required && !ids[cr.ID] {
-				removed = true
-			}
-		}
-		if removed && strings.TrimSpace(in.RemovalReason) == "" {
+		if requiredCriteriaRemoved(c.Draft, in.Contract) && strings.TrimSpace(in.RemovalReason) == "" {
 			fail(w, fmt.Errorf("required criterion removal needs a reason"))
 			return
 		}
-		c, e = s.Repo.Patch(r.Context(), c.ID, in.RowVersion, in.Contract, actor, in.RemovalReason)
+		c, e = s.Repo.Patch(r.Context(), c.ID, in.RowVersion, in.Contract, identity(r, actor).Actor, in.RemovalReason)
 		if e != nil {
 			fail(w, e)
 			return
 		}
+		reply(w, r, c)
+	})
+	mux.HandleFunc("POST /api/proof/checks/{id}/plan", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			RowVersion int    `json:"row_version"`
+			Answer     string `json:"answer"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		c, e := s.Repo.Replan(r.Context(), r.PathValue("id"), in.RowVersion, in.Answer)
+		if e != nil {
+			fail(w, e)
+			return
+		}
+		s.Wake()
 		reply(w, r, c)
 	})
 	mux.HandleFunc("POST /api/proof/checks/{id}/attempts", func(w http.ResponseWriter, r *http.Request) {
@@ -190,10 +244,10 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 			return
 		}
 		if in.IdempotencyKey == "" || len(in.IdempotencyKey) > 128 {
-			fail(w, fmt.Errorf("idempotency_key required, maximum 128 characters"))
+			apiError(w, http.StatusBadRequest, "실행 중복 방지 키가 필요합니다.")
 			return
 		}
-		a, _, e := s.Repo.Approve(r.Context(), r.PathValue("id"), in, actor, s.Registry)
+		a, _, e := s.Repo.Approve(r.Context(), r.PathValue("id"), in, identity(r, actor).Actor, s.Registry)
 		if e != nil {
 			fail(w, e)
 			return
@@ -224,7 +278,11 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 		if !decode(w, r, &in) {
 			return
 		}
-		if e := s.Repo.Disposition(r.Context(), r.PathValue("id"), in.Disposition, actor, in.Reason); e != nil {
+		if len(in.Reason) > 500 {
+			apiError(w, http.StatusBadRequest, "판단 사유는 500자 이하로 적어 주세요.")
+			return
+		}
+		if e := s.Repo.Disposition(r.Context(), r.PathValue("id"), in.Disposition, identity(r, actor).Actor, in.Reason); e != nil {
 			fail(w, e)
 			return
 		}
@@ -251,13 +309,17 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 					return
 				}
 				artifact := ev.Artifact
-				image := r.URL.Query().Get("format") == "image"
+				format := r.URL.Query().Get("format")
+				image := format == "image" || format == "before"
 				if image {
-					if ev.Screenshot == "" {
+					artifact = ev.Screenshot
+					if format == "before" {
+						artifact = ev.BeforeScreenshot
+					}
+					if artifact == "" {
 						http.Error(w, "image unavailable", 410)
 						return
 					}
-					artifact = ev.Screenshot
 				}
 				p := filepath.Join(s.EvidenceDir, a.ID, filepath.Base(artifact))
 				fi, e := os.Lstat(p)
@@ -284,7 +346,7 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 		}
 		cfg.UI.ServeHTTP(w, r)
 	}))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return auth.wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Content-Type", "application/json")
 		}
@@ -292,7 +354,12 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
-		if cfg.LocalOperator {
+		if identity(r, actor).Team != "" {
+			if !s.authorizeResource(r) {
+				apiError(w, 403, "같은 팀의 확인 기록만 열 수 있습니다.")
+				return
+			}
+		} else if cfg.LocalOperator {
 			host, _, e := net.SplitHostPort(r.RemoteAddr)
 			ip := net.ParseIP(host)
 			reqhost := r.Host
@@ -310,7 +377,7 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 				return
 			}
 		}
-		if r.Method != "GET" && r.Method != "HEAD" {
+		if identity(r, actor).Team == "" && r.Method != "GET" && r.Method != "HEAD" {
 			origin := r.Header.Get("Origin")
 			scheme := "http"
 			if r.TLS != nil {
@@ -326,5 +393,18 @@ func (s *Service) Handler(cfg HTTPConfig) (http.Handler, error) {
 			}
 		}
 		mux.ServeHTTP(w, r)
-	}), nil
+	})), nil
+}
+
+func requiredCriteriaRemoved(before, after Contract) bool {
+	required := map[string]bool{}
+	for _, criterion := range after.Criteria {
+		required[criterion.ID] = criterion.Required
+	}
+	for _, criterion := range before.Criteria {
+		if criterion.Required && !required[criterion.ID] {
+			return true
+		}
+	}
+	return false
 }

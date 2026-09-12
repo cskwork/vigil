@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/chromedp"
 	"vigil/internal/browser"
 )
@@ -46,7 +47,8 @@ func TestProofUIVisual(t *testing.T) {
 	for _, viewport := range []struct {
 		name          string
 		width, height int64
-	}{{"desktop", 1280, 900}, {"mobile", 390, 844}} {
+		dark          bool
+	}{{"desktop", 1280, 900, false}, {"tablet", 768, 1024, false}, {"mobile", 390, 844, false}, {"mobile-dark", 390, 844, true}} {
 		t.Run(viewport.name, func(t *testing.T) {
 			var shot []byte
 			var observation struct {
@@ -61,9 +63,12 @@ func TestProofUIVisual(t *testing.T) {
 				} `json:"contrast"`
 				URL string `json:"url"`
 			}
-			err := chromedp.Run(page,
-				chromedp.EmulateViewport(viewport.width, viewport.height),
-				chromedp.Navigate(raw),
+			actions := []chromedp.Action{chromedp.EmulateViewport(viewport.width, viewport.height)}
+			media := emulation.SetEmulatedMedia()
+			if viewport.dark {
+				media = media.WithFeatures([]*emulation.MediaFeature{{Name: "prefers-color-scheme", Value: "dark"}})
+			}
+			actions = append(actions, media, chromedp.Navigate(raw),
 				chromedp.WaitVisible("#app h1", chromedp.ByQuery),
 				chromedp.Evaluate(`(() => {
      const rgb=s=>(s.match(/[\d.]+/g)||[]).map(Number);
@@ -74,8 +79,8 @@ func TestProofUIVisual(t *testing.T) {
       buttons:[...document.querySelectorAll('button')].filter(e=>e.getBoundingClientRect().height).map(e=>({text:e.textContent,height:e.getBoundingClientRect().height})),
       contrast:samples.map(e=>{const a=lum(rgb(getComputedStyle(e).color)),b=lum(bg(e));return {text:e.textContent.slice(0,80),ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)};})};
     })()`, &observation),
-				chromedp.FullScreenshot(&shot, 100),
-			)
+				chromedp.FullScreenshot(&shot, 100))
+			err := chromedp.Run(page, actions...)
 			if err != nil {
 				t.Fatal(err)
 			}

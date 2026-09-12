@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS proof_checks(id TEXT PRIMARY KEY,target_ref TEXT NOT 
 CREATE TABLE IF NOT EXISTS proof_attempts(id TEXT PRIMARY KEY,check_id TEXT NOT NULL REFERENCES proof_checks(id),job_id INTEGER NOT NULL REFERENCES jobs(id),idem_key TEXT NOT NULL,payload_hash TEXT NOT NULL,state TEXT NOT NULL,body TEXT NOT NULL,disposition TEXT NOT NULL DEFAULT '',cancel_requested INTEGER NOT NULL DEFAULT 0,disposition_history TEXT NOT NULL DEFAULT '[]',UNIQUE(check_id,idem_key));
 CREATE TRIGGER IF NOT EXISTS proof_attempt_immutable BEFORE UPDATE OF body ON proof_attempts WHEN OLD.state IN ('DONE','INTERRUPTED','CANCELLED') BEGIN SELECT RAISE(ABORT,'terminal attempt is immutable'); END;
 CREATE INDEX IF NOT EXISTS proof_checks_cursor ON proof_checks(created_at,id);
+CREATE UNIQUE INDEX IF NOT EXISTS proof_intake_key ON proof_checks(json_extract(body,'$.created_by'),json_extract(body,'$.team'),json_extract(body,'$.intake_key')) WHERE COALESCE(json_extract(body,'$.intake_key'),'')<>'';
 `)
 	if e != nil {
 		return nil, e
@@ -68,14 +69,41 @@ func job(ctx context.Context, tx *sql.Tx, kind, ref string) (int64, error) {
 	}
 	return res.LastInsertId()
 }
-func (r *Repository) Create(ctx context.Context, target, request, actor string) (*Check, error) {
-	c := &Check{ID: id(), TargetRef: target, Request: request, CreatedBy: actor, CurrentRevision: 1, RowVersion: 1, CreatedAt: time.Now().UTC(), Planning: "QUEUED", Draft: Contract{Actions: []string{}, Criteria: []Criterion{}}}
+func (r *Repository) Create(ctx context.Context, target, request, actor string, scope ...string) (*Check, error) {
+	now := time.Now().UTC()
+	c := &Check{ID: id(), TargetRef: target, Request: request, CreatedBy: actor, CurrentRevision: 1, RowVersion: 1, CreatedAt: now, UpdatedAt: now, Planning: "QUEUED", Draft: Contract{Actions: []string{}, Criteria: []Criterion{}}}
+	if len(scope) > 0 {
+		c.Team = scope[0]
+	}
+	if len(scope) > 1 {
+		c.IntakeKey = scope[1]
+	}
+	if len(c.IntakeKey) > 128 {
+		return nil, fmt.Errorf("idempotency key too long")
+	}
 	c.ContractHash = Hash(c.Draft)
 	tx, e := r.DB.BeginTx(ctx, nil)
 	if e != nil {
 		return nil, e
 	}
 	defer tx.Rollback()
+	if c.IntakeKey != "" {
+		var body string
+		err := tx.QueryRowContext(ctx, `SELECT body FROM proof_checks WHERE json_extract(body,'$.created_by')=? AND COALESCE(json_extract(body,'$.team'),'')=? AND json_extract(body,'$.intake_key')=?`, actor, c.Team, c.IntakeKey).Scan(&body)
+		if err == nil {
+			var previous Check
+			if err = json.Unmarshal([]byte(body), &previous); err != nil {
+				return nil, err
+			}
+			if previous.TargetRef != target || previous.Request != request {
+				return nil, ErrConflict
+			}
+			return &previous, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
 	if _, e = tx.ExecContext(ctx, `INSERT INTO proof_checks VALUES(?,?,?,?,?,?)`, c.ID, target, 1, 1, encode(c), c.CreatedAt.UnixMilli()); e != nil {
 		return nil, e
 	}
@@ -97,8 +125,12 @@ func (r *Repository) GetCheck(ctx context.Context, id string) (*Check, error) {
 	e = json.Unmarshal([]byte(b), &c)
 	return &c, e
 }
-func (r *Repository) List(ctx context.Context, cursor string) ([]Check, error) {
-	rows, e := r.DB.QueryContext(ctx, `SELECT body, COALESCE((SELECT body FROM proof_attempts a WHERE a.check_id=proof_checks.id ORDER BY a.rowid DESC LIMIT 1),'') FROM proof_checks WHERE ?='' OR (created_at,id)<(SELECT created_at,id FROM proof_checks WHERE id=?) ORDER BY created_at DESC,id DESC LIMIT 51`, cursor, cursor)
+func (r *Repository) List(ctx context.Context, cursor string, teams ...string) ([]Check, error) {
+	team := ""
+	if len(teams) > 0 {
+		team = teams[0]
+	}
+	rows, e := r.DB.QueryContext(ctx, `SELECT body, COALESCE((SELECT body FROM proof_attempts a WHERE a.check_id=proof_checks.id ORDER BY a.rowid DESC LIMIT 1),'') FROM proof_checks WHERE (?='' OR (created_at,id)<(SELECT created_at,id FROM proof_checks WHERE id=?)) AND (?='' OR json_extract(body,'$.team')=?) ORDER BY created_at DESC,id DESC LIMIT 51`, cursor, cursor, team, team)
 	if e != nil {
 		return nil, e
 	}
@@ -145,6 +177,7 @@ func (r *Repository) Patch(ctx context.Context, id string, version int, c Contra
 	old.Draft = c
 	old.CurrentRevision++
 	old.RowVersion++
+	old.UpdatedAt = time.Now().UTC()
 	old.ContractHash = Hash(c)
 	res, e := r.DB.ExecContext(ctx, `UPDATE proof_checks SET current_revision=?,row_version=?,body=? WHERE id=? AND row_version=?`, old.CurrentRevision, old.RowVersion, encode(old), id, version)
 	if e != nil {
@@ -163,6 +196,7 @@ func (r *Repository) PlanResult(ctx context.Context, id string, suggestions json
 	}
 	v := c.RowVersion
 	c.RowVersion++
+	c.UpdatedAt = time.Now().UTC()
 	c.Planning = "READY"
 	c.Suggestions = suggestions
 	if len(suggestions) > 0 && len(c.Draft.Criteria) == 0 {
@@ -175,6 +209,7 @@ func (r *Repository) PlanResult(ctx context.Context, id string, suggestions json
 		c.ContractHash = Hash(con)
 	}
 	c.PlanError = errText
+	c.Question = ""
 	res, e := r.DB.ExecContext(ctx, `UPDATE proof_checks SET current_revision=?,row_version=?,body=? WHERE id=? AND row_version=?`, c.CurrentRevision, c.RowVersion, encode(c), id, v)
 	if e != nil {
 		return e
@@ -184,6 +219,50 @@ func (r *Repository) PlanResult(ctx context.Context, id string, suggestions json
 		return ErrConflict
 	}
 	return nil
+}
+func (r *Repository) PlanQuestion(ctx context.Context, id, question string) error {
+	if len(question) < 3 || len(question) > 500 {
+		return fmt.Errorf("planner question length invalid")
+	}
+	c, e := r.GetCheck(ctx, id)
+	if e != nil {
+		return e
+	}
+	version := c.RowVersion
+	c.RowVersion++
+	c.UpdatedAt = time.Now().UTC()
+	c.Planning = "READY"
+	c.Question = question
+	c.PlanError = ""
+	c.Suggestions = nil
+	res, e := r.DB.ExecContext(ctx, `UPDATE proof_checks SET row_version=?,body=? WHERE id=? AND row_version=?`, c.RowVersion, encode(c), id, version)
+	if e != nil {
+		return e
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrConflict
+	}
+	return nil
+}
+func (r *Repository) SavePlanObservation(ctx context.Context, id string, observation PlanObservation) (*Check, error) {
+	c, e := r.GetCheck(ctx, id)
+	if e != nil {
+		return nil, e
+	}
+	version := c.RowVersion
+	c.RowVersion++
+	c.PlanObservation = observation
+	c.UpdatedAt = time.Now().UTC()
+	res, e := r.DB.ExecContext(ctx, `UPDATE proof_checks SET row_version=?,body=? WHERE id=? AND row_version=?`, c.RowVersion, encode(c), id, version)
+	if e != nil {
+		return nil, e
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return nil, ErrConflict
+	}
+	return c, nil
 }
 func (r *Repository) Attempt(ctx context.Context, id string) (*Attempt, error) {
 	var b, dis, history string
@@ -207,16 +286,16 @@ func (r *Repository) Attempt(ctx context.Context, id string) (*Attempt, error) {
 	return &a, nil
 }
 func (r *Repository) Attempts(ctx context.Context, check string) ([]Attempt, error) {
-	rows, e := r.DB.QueryContext(ctx, `SELECT body,disposition,cancel_requested FROM proof_attempts WHERE check_id=? ORDER BY rowid DESC`, check)
+	rows, e := r.DB.QueryContext(ctx, `SELECT body,disposition,cancel_requested,disposition_history FROM proof_attempts WHERE check_id=? ORDER BY rowid DESC`, check)
 	if e != nil {
 		return nil, e
 	}
 	defer rows.Close()
 	out := []Attempt{}
 	for rows.Next() {
-		var b, d string
+		var b, d, history string
 		var c bool
-		if e = rows.Scan(&b, &d, &c); e != nil {
+		if e = rows.Scan(&b, &d, &c, &history); e != nil {
 			return nil, e
 		}
 		var a Attempt
@@ -225,6 +304,7 @@ func (r *Repository) Attempts(ctx context.Context, check string) ([]Attempt, err
 		}
 		a.Disposition = d
 		a.CancelRequested = c
+		_ = json.Unmarshal([]byte(history), &a.DispositionHistory)
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -266,7 +346,7 @@ func (r *Repository) Approve(ctx context.Context, check string, ap Approval, act
 	if c.CurrentRevision != ap.Revision || c.ContractHash != ap.ContractHash || ap.Scope != c.TargetRef {
 		return nil, false, ErrConflict
 	}
-	p, e := reg.Compile(c.TargetRef, c.Draft, c.Request)
+	p, e := reg.Compile(c.TargetRef, c.Draft, sourceText(c))
 	if e != nil {
 		return nil, false, e
 	}
@@ -324,7 +404,7 @@ func (r *Repository) Cancel(ctx context.Context, id string) error {
 	return nil
 }
 func (r *Repository) Disposition(ctx context.Context, id, d string, audit ...string) error {
-	if d != "OPEN" && d != "ACKNOWLEDGED" && d != "RESOLVED" && d != "DISMISSED" {
+	if d != "OPEN" && d != "ACKNOWLEDGED" && d != "RESOLVED" && d != "DISMISSED" && d != "ACCEPTED" && d != "DEFERRED" && d != "REJECTED" {
 		return fmt.Errorf("invalid disposition")
 	}
 	tx, e := r.DB.BeginTx(ctx, nil)

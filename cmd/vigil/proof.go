@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -25,6 +27,8 @@ func (a *app) cmdProof(ctx context.Context, args []string) error {
 	local := fs.Bool("local-operator", false, "explicit loopback operator mode")
 	gatewayEnv := fs.String("gateway-token-env", "", "environment variable containing gateway bearer token")
 	actor := fs.String("gateway-actor", "", "authenticated fixed gateway principal")
+	usersFile := fs.String("users", "", "operator-provisioned login users JSON file")
+	publicOrigin := fs.String("public-origin", "", "exact HTTPS origin for cookie login")
 	if e := fs.Parse(args); e != nil {
 		return e
 	}
@@ -68,7 +72,23 @@ func (a *app) cmdProof(ctx context.Context, args []string) error {
 	if e = svc.Prune(ctx); e != nil {
 		return e
 	}
-	h, e := svc.Handler(proof.HTTPConfig{LocalOperator: *local, GatewayToken: os.Getenv(*gatewayEnv), GatewayActor: *actor, UI: proof.UI()})
+	var users []proof.LoginUser
+	if *usersFile != "" {
+		data, err := os.ReadFile(*usersFile)
+		if err != nil {
+			return err
+		}
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err = decoder.Decode(&users); err != nil {
+			return err
+		}
+		var tail any
+		if decoder.Decode(&tail) != io.EOF {
+			return fmt.Errorf("users file must contain one JSON value")
+		}
+	}
+	h, e := svc.Handler(proof.HTTPConfig{Users: users, PublicOrigin: *publicOrigin, LocalOperator: *local, GatewayToken: os.Getenv(*gatewayEnv), GatewayActor: *actor, UI: proof.UI()})
 	if e != nil {
 		return e
 	}
