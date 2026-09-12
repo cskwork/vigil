@@ -2,6 +2,8 @@
 
 ProofQA는 등록한 배포 대상에서 요청별로 계약을 작성하고, 사용자가 한 번 승인한 범위만 실행합니다. 기존 `loop`, `approve`, 수집기, 정기 실행 기능은 시작하지 않습니다. 애플리케이션 저장소를 등록할 필요가 없습니다.
 
+화면은 업무용 검증 콘솔로 구성됩니다. 홈에서는 새 검증 요청과 최근 결과를 함께 보고, Check 상세에서는 승인 범위, 실행 단계, 항목별 근거, Attempt 이력과 감사 정보를 같은 화면에서 확인합니다.
+
 ## 독립 데모
 
 먼저 두 실행 파일을 빌드합니다.
@@ -30,6 +32,8 @@ go build -o /tmp/proof-demo ./cmd/proof-demo
 > 답을 지우면 화면과 API의 현재 답은 비어 있어야 하고, 기존 제출 기록은 유지되어야 합니다.
 
 `확인 기준 만들기`를 누르고 기준을 검토한 뒤 실행합니다. 데모 계약은 빈 문자열과 이력 보존이라는 등록된 정의를 사용합니다. 다른 요청을 같은 계약으로 임의 변환하지 않습니다. 일반 요청은 등록된 대상 정의와 Pi 계획 도구가 필요합니다. 도구가 없으면 지원하지 않는 요청으로 표시합니다. 모델 제안은 승인이나 판정이 아닙니다.
+
+한 사람이 기획·QA·개발 관점의 확인을 모두 맡아도 역할을 바꿀 필요가 없습니다. 요청을 작성한 같은 계정이 기준을 수정하고 실행하며, 결과에 `확인 완료`, `보류`, `반려` 판단을 별도로 남깁니다. 이 판단은 기술 결과를 바꾸지 않습니다.
 
 ## 선택 사항: 실제 MySQL 관찰
 
@@ -61,9 +65,21 @@ PROOF_MYSQL_DSN=reader_user:password@tcp(127.0.0.1:3306)/isolated_proofqa
 
 `--local-operator`는 명시적인 단일 로컬 운영자 모드이며 literal loopback 주소에만 바인딩합니다. Host와 요청 출발 주소도 loopback인지 확인합니다. 외부 바인딩은 인증 설정이 없으면 거부합니다.
 
+한 사용자가 원격 서버에 로그인하려면 [사용자 예제](../examples/proof/users.json)에 계정 이름, 팀과 비밀번호 환경 변수 이름을 지정합니다. JSON에 비밀번호를 넣지 않습니다. 비밀번호는 16자 이상이며 서버 환경 변수로만 전달합니다. 외부 주소에서는 정확한 HTTPS origin이 필요합니다.
+
+```sh
+PROOF_LOGIN_PASSWORD='운영 환경의 긴 비밀번호' /tmp/vigil proof \
+  --registry /srv/proof/registry.json --users /srv/proof/users.json \
+  --public-origin https://proof.example.com --addr 127.0.0.1:8788
+```
+
+로그인 세션은 HttpOnly·SameSite=Strict 쿠키를 쓰며 8시간 뒤 만료됩니다. 변경 요청은 세션별 CSRF 토큰과 정확한 Origin을 확인합니다. 1분 동안 로그인 실패가 5회 쌓이면 잠시 차단합니다. 서버를 다시 시작하면 다시 로그인합니다.
+
 외부 서비스는 신뢰할 수 있는 인증 게이트웨이가 `--gateway-token-env`로 지정한 32자 이상의 bearer token을 삽입하도록 구성할 수 있습니다. `--gateway-actor`는 그 token의 고정된 인증 주체입니다. 클라이언트가 보낸 사용자 이름 헤더는 신뢰하지 않습니다. 이 기능은 제품 자체의 여러 사용자 로그인 시스템이 아닙니다. 사용자별 권한·팀 분리와 조직 SSO 연동은 실제 게이트웨이에서 추가 검증해야 합니다. 프록시의 원본 Host/Origin과 TLS 종료 구성을 확인해야 합니다.
 
 모든 변경 API는 `/api/proof/session`의 CSRF token을 `X-Proof-CSRF`로 요구합니다. 증거는 해당 attempt manifest에 연결된 파일만 제공하며 기존 legacy evidence 경로는 제공하지 않습니다.
+
+화면 동작에서 저장 후 API 재조회가 발생하지 않는 대상은 운영자가 network observer에 `direct_read: true`를 지정할 수 있습니다. 이 옵션은 같은 브라우저 세션에서 레지스트리에 정확히 등록한 GET 한 건만 실행합니다. 임의 URL이나 모델이 찾은 endpoint는 호출하지 않습니다.
 
 브라우저 요청은 등록된 exact scope로 차단합니다. 현재 실행기는 일반 페이지 안의 DOM/API 흐름을 지원합니다. iframe, popup, worker, object는 삽입한 CSP로 금지합니다. 이를 요구하는 대상은 지원되지 않으며 대상 환경에서 별도 검증 없이 지원한다고 간주하면 안 됩니다. 실제 회사 사이트의 복잡한 로그인, iframe/SSO, 네트워크 정책은 별도 통합 승인 대상입니다.
 
@@ -71,17 +87,20 @@ PROOF_MYSQL_DSN=reader_user:password@tcp(127.0.0.1:3306)/isolated_proofqa
 
 | 메서드 | 경로 | 내용 |
 |---|---|---|
+| POST | `/api/proof/login`, `/api/proof/logout` | 선택한 쿠키 로그인 모드의 세션 시작 / 종료 |
 | GET | `/api/proof/session` | 인증 주체와 CSRF token |
 | GET | `/api/proof/registry` | 공개 가능한 등록 대상 |
 | POST/GET | `/api/proof/checks` | 요청 생성 / 최신순 cursor 목록 |
 | GET | `/api/proof/checks/{id}` | 체크와 시도 목록 |
 | PATCH | `/api/proof/checks/{id}/contract` | `row_version`, `contract`, 선택적 `removal_reason` |
+| POST | `/api/proof/checks/{id}/plan` | 같은 Check에서 중요한 질문에 답하거나 기준 생성을 다시 시도 |
 | POST | `/api/proof/checks/{id}/attempts` | `revision`, `contract_hash`, `registry_hash`, `scope`, `idempotency_key`, 선택적 `baseline` |
 | GET | `/api/proof/attempts/{id}` | 진행과 불변 결과 |
 | POST | `/api/proof/attempts/{id}/cancel` | 이후 동작 중단 |
 | POST | `/api/proof/attempts/{id}/disposition` | 별도 처리 상태·이유 |
 | GET | `/api/proof/attempts/{id}/evidence/{evidence}` | 연결된 JSON 증거 |
 | GET | 같은 증거 경로 + `?format=image` | 가능한 경우 기준 영역 이미지 |
+| GET | 같은 증거 경로 + `?format=before` | 가능한 경우 변경 전 기준 영역 이미지 |
 
 조회 JSON은 ETag를 제공하며 If-None-Match가 일치하면 304를 반환합니다. registry_hash는 화면에서 검토한 등록 범위를 승인에 묶습니다. 동작이나 fixture 등의 등록 내용이 바뀌면 409로 재검토를 요구합니다.
 
@@ -99,4 +118,4 @@ PROOF_MYSQL_DSN=reader_user:password@tcp(127.0.0.1:3306)/isolated_proofqa
 
 기본 검증은 `go test ./...`, `go vet ./...`입니다. UI와 실제 Chromium 통합 검사는 `internal/proof/ui_e2e_test.go`의 opt-in 환경 변수를 참고하세요. 데모 A/B/C와 실제 격리 MySQL에서의 실행 증거는 [검증 기록](proofqa-verification.md)에 정리합니다.
 
-현재 지원하는 JSON 필드 경로는 객체의 점 표기입니다. 배열 경로, 임의 실행 스크립트, LLM SQL, 자동 수정, 정기 실행, 외부 게시와 production 쓰기는 제공하지 않습니다. 실제 회사 대상과 다섯 사용자 검증은 수행하지 않은 상태이며 독립 데모 결과를 그 근거로 대신하지 않습니다. Pi는 등록된 observer만 선택하는 단일 tool-free JSON 제안 호출을 지원합니다. 자동 브라우저 탐색은 제공하지 않습니다. 실제 모델 계정·provider 동작은 배포 환경에서 확인해야 합니다.
+현재 지원하는 JSON 필드 경로는 객체의 점 표기입니다. 배열 경로, 임의 실행 스크립트, LLM SQL, 자동 수정, 정기 실행, 외부 게시와 production 쓰기는 제공하지 않습니다. 사용성 기준은 기획·QA·개발 확인을 한 계정이 수행하는 한 사용자 흐름으로 정했고 합성 환경에서 검증했습니다. 실제 회사 대상 검증은 수행하지 않았으며 독립 데모 결과를 그 근거로 대신하지 않습니다. Pi는 등록된 observer만 선택하는 단일 tool-free JSON 제안 호출을 지원합니다. 계약 생성 전에 등록된 시작 화면 한 곳의 컨트롤 구조만 읽으며 최대 두 Document URL을 허용합니다. 서비스 전체를 자동 탐색하지 않습니다. 실제 모델 계정·provider 동작은 배포 환경에서 확인해야 합니다.

@@ -21,7 +21,10 @@ scenario for it. You approve that scenario, and vigil runs it every day.
 `vigil proof` adds a Korean web flow: describe one change, review its criteria,
 approve one run, and read the result and evidence on the same page. It uses the
 existing Chromium runner with registered DOM/API observations and optional
-read-only MySQL probes. Missing evidence remains unverified.
+read-only MySQL probes. Missing evidence remains unverified. One signed-in
+operator can complete the planning, QA, and development review in the same
+business console; the recorded human disposition never changes the technical
+verdict.
 
 See the [ProofQA setup and independent A/B/C demo](docs/proofqa.md) and
 [implementation verification record](docs/proofqa-verification.md). This mode

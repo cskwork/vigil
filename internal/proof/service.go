@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -145,10 +146,14 @@ func (s *Service) plan(ctx context.Context, id string) error {
 	if t := s.Registry.Targets[c.TargetRef]; t.Template != nil && demoRequest(c.Request) {
 		return s.Repo.PlanResult(ctx, id, json.RawMessage(encode(t.Template)), "")
 	}
+	observation := s.observeForPlan(ctx, c.ID, s.Registry.Targets[c.TargetRef])
+	if c, e = s.Repo.SavePlanObservation(ctx, id, observation); e != nil {
+		return e
+	}
 	if s.Registry.PiCommand == "" {
 		return s.Repo.PlanResult(ctx, id, nil, "이 요청을 처리할 제안 도구가 등록되지 않았습니다. 운영자가 대상과 계획 도구를 설정해야 합니다.")
 	}
-	raw, e := agent.ProofPlan(ctx, s.Registry.PiCommand, s.Registry.PiModel, planningInput(c.Request, s.Registry.Targets[c.TargetRef]))
+	raw, e := agent.ProofPlan(ctx, s.Registry.PiCommand, s.Registry.PiModel, planningInput(sourceText(*c), s.Registry.Targets[c.TargetRef], observation))
 	if e != nil {
 		message := "계약 제안을 생성하지 못했습니다. 운영자가 계획 도구의 연결을 확인해야 합니다."
 		switch {
@@ -161,21 +166,45 @@ func (s *Service) plan(ctx context.Context, id string) error {
 		}
 		return s.Repo.PlanResult(ctx, id, nil, message)
 	}
+	con, question, parseErr := parsePlanOutput(s.Registry, c.TargetRef, sourceText(*c), raw)
+	if parseErr != nil {
+		return s.Repo.PlanResult(ctx, id, nil, parseErr.Error())
+	}
+	if question != "" {
+		return s.Repo.PlanQuestion(ctx, id, question)
+	}
+	return s.Repo.PlanResult(ctx, id, json.RawMessage(encode(con)), "")
+}
+
+func parsePlanOutput(reg Registry, targetRef, request string, raw json.RawMessage) (Contract, string, error) {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(raw, &envelope) == nil {
+		if questionRaw, ok := envelope["question"]; ok {
+			var question string
+			if len(envelope) != 1 || json.Unmarshal(questionRaw, &question) != nil || strings.TrimSpace(question) == "" {
+				return Contract{}, "", fmt.Errorf("제안 형식이 올바르지 않습니다.")
+			}
+			return Contract{}, question, nil
+		}
+	}
 	var con Contract
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if e = decoder.Decode(&con); e != nil {
-		return s.Repo.PlanResult(ctx, id, nil, "제안 형식이 올바르지 않습니다.")
+	if err := decoder.Decode(&con); err != nil {
+		return Contract{}, "", fmt.Errorf("제안 형식이 올바르지 않습니다.")
 	}
-	for _, cr := range con.Criteria {
-		if _, ok := s.Registry.Targets[c.TargetRef].Observers[cr.Observer]; !ok {
-			return s.Repo.PlanResult(ctx, id, nil, "제안에 등록되지 않은 관찰자가 있습니다.")
+	for _, criterion := range con.Criteria {
+		if _, ok := reg.Targets[targetRef].Observers[criterion.Observer]; !ok {
+			return Contract{}, "", fmt.Errorf("제안에 등록되지 않은 관찰자가 있습니다.")
 		}
 	}
-	if _, e = s.Registry.Compile(c.TargetRef, con, c.Request); e != nil {
-		return s.Repo.PlanResult(ctx, id, nil, "제안이 등록된 범위 또는 기대값 출처를 충족하지 못했습니다.")
+	for i := range con.Criteria {
+		con.Criteria[i].Proposed = true
 	}
-	return s.Repo.PlanResult(ctx, id, raw, "")
+	if _, err := reg.Compile(targetRef, con, request); err != nil {
+		return Contract{}, "", fmt.Errorf("제안이 등록된 범위 또는 기대값 출처를 충족하지 못했습니다.")
+	}
+	return con, "", nil
 }
 func (s *Service) execute(ctx context.Context, id string) (runErr error) {
 	a, e := s.Repo.Attempt(ctx, id)
@@ -205,10 +234,28 @@ func (s *Service) execute(ctx context.Context, id string) (runErr error) {
 	if a.CancelRequested {
 		return s.finish(a, "CANCELLED", nil, "cancelled before actions")
 	}
-	if e := prepareFixture(ctx, a); e != nil {
-		return s.finish(a, "DONE", nil, e.Error())
-	}
 	a.State = "RUNNING"
+	mutating := false
+	for _, actionID := range a.Plan.Actions {
+		mutating = mutating || a.Target.Actions[actionID].Mutating
+	}
+	if mutating {
+		a.Progress = "테스트 데이터를 준비하고 있습니다"
+		started := time.Now().UTC()
+		a.ActionJournal = append(a.ActionJournal, ActionEvent{Action: "fixture", Title: "테스트 데이터 준비", Step: 0, State: "RUNNING", StartedAt: started})
+		if e = s.Repo.Update(ctx, a); e != nil {
+			return e
+		}
+		if e := prepareFixture(ctx, a); e != nil {
+			finished := time.Now().UTC()
+			a.ActionJournal[len(a.ActionJournal)-1].State = "FAILED"
+			a.ActionJournal[len(a.ActionJournal)-1].FinishedAt = &finished
+			return s.finish(a, "DONE", nil, e.Error())
+		}
+		finished := time.Now().UTC()
+		a.ActionJournal[len(a.ActionJournal)-1].State = "DONE"
+		a.ActionJournal[len(a.ActionJournal)-1].FinishedAt = &finished
+	}
 	a.Progress = "브라우저를 준비하고 있습니다"
 	if e = s.Repo.Update(ctx, a); e != nil {
 		return e
@@ -227,7 +274,13 @@ func (s *Service) execute(ctx context.Context, id string) (runErr error) {
 	con.Oracle.Source = "contract"
 	con.Oracle.Note = a.Approval.ContractHash
 	persona := a.Target.Personas[a.Contract.Persona]
-	con.Steps = append(con.Steps, persona.Setup...)
+	if len(persona.Setup) > 0 {
+		for i, step := range persona.Setup {
+			step.Name = fmt.Sprintf("account_setup:%d", i)
+			con.Steps = append(con.Steps, step)
+		}
+		con.Steps = append(con.Steps, dsl.Step{Name: "account_setup:observe", WaitMs: 1})
+	}
 	for _, aid := range a.Plan.Actions {
 		act := a.Target.Actions[aid]
 		if act.Mutating {
@@ -249,7 +302,7 @@ func (s *Service) execute(ctx context.Context, id string) (runErr error) {
 		secrets[name] = v
 	}
 	obs := &observation{evidenceDir: s.EvidenceDir, a: a, ctx: ctx, cancel: cancel, repo: s.Repo, probes: &ProbeRunner{Registry: s.Registry.Probes}}
-	res, e := rr.Run(ctx, runner.Spec{ProjectID: "proof", Scenario: con, Browser: model.BrowserChromium, BaseURL: a.Target.BaseURL, Persona: secrets, RunTimeout: 3 * time.Minute, StepTimeout: 5 * time.Second, Hooks: obs})
+	res, e := rr.Run(ctx, runner.Spec{ProjectID: "proof", Scenario: con, Browser: model.BrowserChromium, BaseURL: a.Target.BaseURL, Persona: secrets, EvidenceDir: filepath.Join(s.EvidenceDir, a.ID), RunTimeout: 3 * time.Minute, StepTimeout: 5 * time.Second, Hooks: obs})
 	if e != nil {
 		return s.finish(a, "DONE", nil, "browser infrastructure unavailable")
 	}
@@ -274,7 +327,15 @@ func (s *Service) finish(a *Attempt, state string, res *runner.Result, reason st
 	}
 	for _, c := range a.Contract.Criteria {
 		if !existing[c.ID] {
-			a.Results = append(a.Results, CriterionResult{ID: c.ID, Required: c.Required, Status: "UNKNOWN", Reason: reason, Evidence: []Evidence{}})
+			r := CriterionResult{ID: c.ID, Required: c.Required, Status: "UNKNOWN", Reason: reason, Evidence: []Evidence{}}
+			if res != nil && res.ScreenshotPath != "" {
+				action := ""
+				if res.FailedStep != nil {
+					action = strings.Split(res.FailedStep.Name, ":")[0]
+				}
+				r.Evidence = append(r.Evidence, Evidence{ID: id(), Attempt: a.ID, Criterion: c.ID, Action: action, Persona: a.Contract.Persona, Entity: a.Fixture.Entity, At: now, Source: "browser", Status: "UNKNOWN", Reason: reason, Screenshot: filepath.Base(res.ScreenshotPath)})
+			}
+			a.Results = append(a.Results, r)
 		}
 	}
 	changed := a.ObservedVersion != "" && a.VersionAfter != "" && a.ObservedVersion != a.VersionAfter
@@ -324,7 +385,7 @@ func demoRequest(s string) bool {
 	return empty && history && preserve && !strings.Contains(s, "이력 삭제") && !strings.Contains(s, "기록 삭제")
 }
 
-func planningInput(request string, t Target) string {
+func planningInput(request string, t Target, observations ...PlanObservation) string {
 	personas := map[string]any{}
 	for id, p := range t.Personas {
 		personas[id] = map[string]string{"account": p.Account}
@@ -341,6 +402,15 @@ func planningInput(request string, t Target) string {
 	for id, o := range t.Observers {
 		observers[id] = map[string]string{"kind": o.Kind, "action": o.Action}
 	}
-	raw := json.RawMessage(encode(map[string]any{"request": request, "personas": personas, "fixtures": fixtures, "actions": actions, "observers": observers, "definitions": t.Definitions}))
+	input := map[string]any{"request": request, "personas": personas, "fixtures": fixtures, "actions": actions, "observers": observers, "definitions": t.Definitions}
+	if len(observations) > 0 {
+		input["read_only_page_observation"] = observations[0]
+	}
+	raw := json.RawMessage(encode(input))
 	return string(redactJSON(raw, t))
+}
+
+func sourceText(c Check) string {
+	parts := append([]string{c.Request}, c.Clarifications...)
+	return strings.Join(parts, "\n")
 }

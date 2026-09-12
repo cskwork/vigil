@@ -1,0 +1,7 @@
+[
+  {
+    "name": "operator",
+    "team": "owner",
+    "password_env": "PROOF_LOGIN_PASSWORD"
+  }
+]

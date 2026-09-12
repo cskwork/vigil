@@ -77,6 +77,25 @@ func (s *Service) publicAttempt(a *Attempt) *Attempt {
 					ev.Availability = "missing"
 				}
 			}
+			if ev.Availability != "available" {
+				ev.Screenshot = ""
+				ev.BeforeScreenshot = ""
+				continue
+			}
+			for field, name := range map[string]string{"after": ev.Screenshot, "before": ev.BeforeScreenshot} {
+				if name == "" {
+					continue
+				}
+				path := filepath.Join(s.EvidenceDir, out.ID, filepath.Base(name))
+				info, err := os.Lstat(path)
+				if err != nil || !info.Mode().IsRegular() {
+					if field == "after" {
+						ev.Screenshot = ""
+					} else {
+						ev.BeforeScreenshot = ""
+					}
+				}
+			}
 		}
 	}
 	return &out

@@ -8,6 +8,7 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"os"
 	"path/filepath"
@@ -28,18 +29,19 @@ type observation struct {
 	activeAction string
 	evidenceDir  string
 
-	a           *Attempt
-	ctx         context.Context
-	cancel      context.CancelFunc
-	repo        *Repository
-	mu          sync.Mutex
-	responses   map[network.RequestID]*response
-	actionTimes map[string]time.Time
-	completed   map[string]bool
-	results     map[string]CriterionResult
-	blocked     bool
-	probes      *ProbeRunner
-	before      map[string][]map[string]Value
+	a                 *Attempt
+	ctx               context.Context
+	cancel            context.CancelFunc
+	repo              *Repository
+	mu                sync.Mutex
+	responses         map[network.RequestID]*response
+	actionTimes       map[string]time.Time
+	completed         map[string]bool
+	results           map[string]CriterionResult
+	blocked           bool
+	probes            *ProbeRunner
+	before            map[string][]map[string]Value
+	beforeScreenshots map[string]string
 }
 
 func (o *observation) Setup(ctx context.Context) error {
@@ -48,6 +50,7 @@ func (o *observation) Setup(ctx context.Context) error {
 	o.completed = map[string]bool{}
 	o.results = map[string]CriterionResult{}
 	o.before = map[string][]map[string]Value{}
+	o.beforeScreenshots = map[string]string{}
 	chromedp.ListenTarget(ctx, func(ev any) {
 		switch e := ev.(type) {
 		case *fetch.EventRequestPaused:
@@ -143,6 +146,16 @@ func (o *observation) BeforeStep(ctx context.Context, index int, name string) er
 	if blocked {
 		return fmt.Errorf("unapproved request was blocked")
 	}
+	title := action
+	if action == "account_setup" {
+		title = "QA 계정 준비"
+	}
+	if v, ok := o.a.Target.Actions[action]; ok && v.Title != "" {
+		title = v.Title
+	}
+	if !seen {
+		o.a.ActionJournal = append(o.a.ActionJournal, ActionEvent{Action: action, Title: title, Step: index, State: "RUNNING", StartedAt: time.Now().UTC()})
+	}
 	if !seen {
 		for _, c := range o.a.Contract.Criteria {
 			ob, ok := o.a.Target.Observers[c.Observer]
@@ -157,19 +170,49 @@ func (o *observation) BeforeStep(ctx context.Context, index int, name string) er
 	if o.a.ObservedVersion == "" && o.a.Target.VersionSelector != "" {
 		o.a.ObservedVersion = o.version(ctx)
 	}
-	o.a.Progress = action
+	for _, c := range o.a.Contract.Criteria {
+		ob, ok := o.a.Target.Observers[c.Observer]
+		if !ok || ob.Action != action || ob.Kind != "dom" || o.beforeScreenshots[c.ID] != "" {
+			continue
+		}
+		if file := o.safeScreenshot(ctx, ob.Selector, "before"); file != "" {
+			o.beforeScreenshots[c.ID] = file
+		}
+	}
+	o.a.Progress = title
 	return o.repo.Update(o.ctx, o.a)
 }
 func (o *observation) AfterStep(ctx context.Context, index int, name string, ok bool) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	finished := time.Now().UTC()
+	action := strings.Split(name, ":")[0]
+	for i := len(o.a.ActionJournal) - 1; i >= 0; i-- {
+		if o.a.ActionJournal[i].Action == action && o.a.ActionJournal[i].FinishedAt == nil {
+			if ok && !strings.HasSuffix(name, ":observe") {
+				break
+			}
+			o.a.ActionJournal[i].FinishedAt = &finished
+			if ok {
+				o.a.ActionJournal[i].State = "DONE"
+			} else {
+				o.a.ActionJournal[i].State = "FAILED"
+			}
+			break
+		}
+	}
 	if !ok {
+		_ = o.repo.Update(context.Background(), o.a)
 		return
 	}
 	if !strings.HasSuffix(name, ":observe") {
 		return
 	}
-	action := strings.TrimSuffix(name, ":observe")
+	action = strings.TrimSuffix(name, ":observe")
+	if action == "account_setup" {
+		_ = o.repo.Update(context.Background(), o.a)
+		return
+	}
 	o.completed[action] = true
 	for _, c := range o.a.Contract.Criteria {
 		ob, exists := o.a.Target.Observers[c.Observer]
@@ -198,7 +241,12 @@ func (o *observation) AfterStep(ctx context.Context, index int, name string, ok 
 				actual = Value{out.Present, out.Data}
 			}
 		case "network":
-			actual, reason, details = o.networkValue(ctx, ob)
+			if ob.DirectRead {
+				reason = o.directRead(ctx, ob)
+			}
+			if reason == "" {
+				actual, reason, details = o.networkValue(ctx, ob)
+			}
 		case "mysql":
 			if o.probes == nil {
 				reason = "DB probe unavailable"
@@ -209,8 +257,16 @@ func (o *observation) AfterStep(ctx context.Context, index int, name string, ok 
 				if e != nil {
 					reason = "after-action DB evidence unavailable"
 				} else {
-					details = json.RawMessage(encode(map[string]any{"before": before, "after": after, "baseline_kind": "before-action"}))
-					b, _ := json.Marshal(Hash(before) == Hash(after))
+					compare := ob.Compare
+					if compare == "" {
+						compare = "unchanged"
+					}
+					matched := Hash(before) == Hash(after)
+					if compare == "preserves" {
+						matched = rowsPreserved(before, after)
+					}
+					details = json.RawMessage(encode(map[string]any{"before": before, "after": after, "baseline_kind": "before-action", "compare": compare}))
+					b, _ := json.Marshal(matched)
 					actual = Value{true, b}
 				}
 			}
@@ -229,7 +285,7 @@ func (o *observation) AfterStep(ctx context.Context, index int, name string, ok 
 			}
 		}
 		r.Reason = reason
-		r.Evidence = []Evidence{{Details: details, ID: id(), Attempt: o.a.ID, Criterion: c.ID, Action: action, Persona: o.a.Contract.Persona, Entity: o.a.Fixture.Entity, At: time.Now().UTC(), Source: ob.Kind, Actual: actual, Status: r.Status, Reason: reason}}
+		r.Evidence = []Evidence{{Details: details, ID: id(), Attempt: o.a.ID, Criterion: c.ID, Action: action, Persona: o.a.Contract.Persona, Entity: o.a.Fixture.Entity, At: time.Now().UTC(), Source: ob.Kind, Actual: actual, Status: r.Status, Reason: reason, BeforeScreenshot: o.beforeScreenshots[c.ID]}}
 		for i := range r.Evidence {
 			r.Evidence[i].Actual.Data = redactJSON(r.Evidence[i].Actual.Data, o.a.Target)
 			r.Evidence[i].Details = redactJSON(r.Evidence[i].Details, o.a.Target)
@@ -258,6 +314,44 @@ func (o *observation) AfterStep(ctx context.Context, index int, name string, ok 
 		o.results[c.ID] = r
 	}
 	o.flush()
+}
+func rowsPreserved(before, after []map[string]Value) bool {
+	available := map[string]int{}
+	for _, row := range after {
+		available[Hash(row)]++
+	}
+	for _, row := range before {
+		key := Hash(row)
+		if available[key] == 0 {
+			return false
+		}
+		available[key]--
+	}
+	return true
+}
+func (o *observation) safeScreenshot(ctx context.Context, selector, suffix string) string {
+	if selector == "" || o.evidenceDir == "" {
+		return ""
+	}
+	sel, _ := json.Marshal(selector)
+	var safe bool
+	_ = chromedp.Run(ctx, chromedp.Evaluate(fmt.Sprintf(`(()=>{const e=document.querySelector(%s);return !!e&&!e.matches("input,textarea,[contenteditable]")&&!e.querySelector("input,textarea,[contenteditable]")})()`, sel), &safe))
+	if !safe {
+		return ""
+	}
+	var shot []byte
+	if chromedp.Run(ctx, chromedp.Screenshot(selector, &shot, chromedp.ByQuery)) != nil {
+		return ""
+	}
+	dir := filepath.Join(o.evidenceDir, o.a.ID)
+	if os.MkdirAll(dir, 0700) != nil {
+		return ""
+	}
+	file := id() + "-" + suffix + ".png"
+	if os.WriteFile(filepath.Join(dir, file), shot, 0600) != nil {
+		return ""
+	}
+	return file
 }
 func (o *observation) networkValue(ctx context.Context, ob Observer) (Value, string, json.RawMessage) {
 	if ob.EntityPath == "" {
@@ -305,12 +399,22 @@ func (o *observation) networkValue(ctx context.Context, ob Observer) (Value, str
 				if err != nil || !success.Present || !Equal(success, ob.Success) || write.Status < 200 || write.Status >= 300 {
 					return Value{}, "save success not established", nil
 				}
+				writeEntity, err := JSONValue(write.Body, ob.EntityPath)
+				if err != nil || !Equal(writeEntity, Value{true, json.RawMessage(encode(o.a.Fixture.Entity))}) {
+					return Value{}, "save response belongs to another entity", nil
+				}
+				if ob.GenerationPath != "" {
+					writeGeneration, err := JSONValue(write.Body, ob.GenerationPath)
+					if err != nil || !Equal(writeGeneration, Value{true, json.RawMessage(encode(o.a.FixtureGeneration))}) {
+						return Value{}, "save response belongs to another fixture generation", nil
+					}
+				}
 			}
 
 			if r.Status == 401 || r.Status == 403 {
 				return Value{}, "authentication unavailable", nil
 			}
-			if r.Status >= 500 || r.Error != "" {
+			if r.Status < 200 || r.Status >= 300 || r.Error != "" {
 				return Value{}, "network evidence unavailable", nil
 			}
 			if len(r.Body) > 0 {
@@ -352,6 +456,25 @@ func (o *observation) networkValue(ctx context.Context, ob Observer) (Value, str
 		}
 	}
 }
+
+// directRead is opt-in and may only call the exact GET registered by an operator.
+// It runs inside the approved browser session, so authentication is not copied
+// into the service or exposed to the planner.
+func (o *observation) directRead(ctx context.Context, ob Observer) string {
+	if ob.API == nil || ob.API.Method != "GET" || !Allowed(scopeURL(*ob.API), "GET", o.a.Target.Scope) {
+		return "registered reread request unavailable"
+	}
+	raw, _ := json.Marshal(scopeURL(*ob.API))
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	script := fmt.Sprintf(`fetch(%s,{method:"GET",credentials:"include",cache:"no-store",redirect:"error"}).then(r=>r.text()).then(()=>({ok:true})).catch(()=>({ok:false}))`, raw)
+	awaitPromise := func(params *runtime.EvaluateParams) *runtime.EvaluateParams { return params.WithAwaitPromise(true) }
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &result, awaitPromise)); err != nil || !result.OK {
+		return "registered reread request unavailable"
+	}
+	return ""
+}
 func JSONValue(body []byte, path string) (Value, error) {
 	var v any
 	d := json.NewDecoder(strings.NewReader(string(body)))
@@ -391,6 +514,30 @@ func (o *observation) Finish(ctx context.Context) {
 	o.mu.Lock()
 	blocked := o.blocked
 	o.mu.Unlock()
+	for _, c := range o.a.Contract.Criteria {
+		if _, ok := o.results[c.ID]; ok || o.beforeScreenshots[c.ID] == "" {
+			continue
+		}
+		o.results[c.ID] = CriterionResult{
+			ID:       c.ID,
+			Required: c.Required,
+			Status:   "UNKNOWN",
+			Reason:   "required observation not reached",
+			Evidence: []Evidence{{
+				ID:               id(),
+				Attempt:          o.a.ID,
+				Criterion:        c.ID,
+				Action:           o.a.Target.Observers[c.Observer].Action,
+				Persona:          o.a.Contract.Persona,
+				Entity:           o.a.Fixture.Entity,
+				At:               time.Now().UTC(),
+				Source:           o.a.Target.Observers[c.Observer].Kind,
+				Status:           "UNKNOWN",
+				Reason:           "required observation not reached",
+				BeforeScreenshot: o.beforeScreenshots[c.ID],
+			}},
+		}
+	}
 	if blocked {
 		for _, c := range o.a.Contract.Criteria {
 			r, ok := o.results[c.ID]

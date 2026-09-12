@@ -3,6 +3,7 @@
   const root = document.getElementById("app"),
     notice = document.getElementById("notice");
   const state = {
+    session: null,
     targets: {},
     csrf: "",
     check: null,
@@ -63,7 +64,7 @@
       "badge " + s,
     );
   const sourceLabel = (s) =>
-    ({ dom: "화면", network: "API", mysql: "DB" })[s] || s;
+    ({ dom: "화면", browser: "브라우저", network: "API", mysql: "DB" })[s] || s;
   const reasonText = (r) => {
     if (!r) return "";
     if (/differs|mismatch/i.test(r))
@@ -151,12 +152,14 @@
         403: "이 작업을 실행할 권한이 없거나 세션이 만료됐습니다. 새로고침 후 다시 시도해 주세요.",
         422: "기준과 예상값을 확인해 주세요.",
       };
-      throw Error(
+      const error = Error(
         (hints[res.status] ||
           "요청을 처리하지 못했습니다. 입력을 확인한 뒤 다시 시도해 주세요.") +
           " " +
           (data.error || ""),
       );
+      error.status = res.status;
+      throw error;
     }
     if (method === "GET")
       state.cache.set(path, { data, etag: res.headers.get("ETag") });
@@ -170,11 +173,20 @@
     try {
       await fn();
     } catch (e) {
-      message(e.message);
+      showError(e);
     } finally {
       state.busy = false;
       if (b?.isConnected) b.disabled = false;
     }
+  }
+  function showError(e) {
+    if (e.status === 401 && state.session) {
+      state.session = null;
+      login();
+      message("로그인 시간이 끝났습니다. 다시 로그인하면 같은 화면에서 이어집니다.");
+      return;
+    }
+    message(e.message);
   }
   function clear() {
     root.replaceChildren();
@@ -216,8 +228,11 @@
   }
   function home() {
     clear();
+    const heading = el("div", undefined, "page-heading"),
+      headingCopy = el("div");
     add(
-      root,
+      headingCopy,
+      el("p", "검증 요청", "eyebrow"),
       el("h1", "무엇이 제대로 수정됐는지 확인할까요?"),
       el(
         "p",
@@ -225,6 +240,20 @@
         "intro muted",
       ),
     );
+    heading.append(headingCopy);
+    if (state.session?.login) {
+      const signed = el("div", undefined, "row session-row");
+      add(
+        signed,
+        el("p", `${state.session.actor} 계정으로 확인 중`, "muted"),
+        btn("로그아웃", async () => {
+          await api("/logout", "POST", {});
+          location.href = "/";
+        }),
+      );
+      heading.append(signed);
+    }
+    root.append(heading);
     const form = el("form", undefined, "panel"),
       select = el("select");
     select.required = true;
@@ -236,6 +265,11 @@
     }
     const previous = readLocal("proof-target");
     if (state.targets[previous]) select.value = previous;
+    const targetURL = el("input");
+    targetURL.type = "url";
+    targetURL.required = true;
+    targetURL.value =
+      readLocal("proof-url") || state.targets[select.value]?.base_url || "";
     const env = el("p", undefined, "muted");
     const update = () => {
       const t = state.targets[select.value];
@@ -249,11 +283,25 @@
     };
     select.onchange = () => {
       writeLocal("proof-target", select.value);
+      targetURL.value = state.targets[select.value]?.base_url || "";
+      writeLocal("proof-url", targetURL.value);
       update();
+    };
+    targetURL.oninput = () => {
+      writeLocal("proof-url", targetURL.value);
+      const match = entries.find(
+        ([, t]) => t.base_url === targetURL.value.trim(),
+      );
+      if (match) {
+        select.value = match[0];
+        writeLocal("proof-target", match[0]);
+        update();
+      }
     };
     update();
     const request = el("textarea");
     request.required = true;
+    request.minLength = 3;
     request.maxLength = 10000;
     request.placeholder =
       "예: 제목을 수정하고 저장한 뒤 새로고침해도 수정한 제목이 그대로 보여야 합니다.";
@@ -264,7 +312,8 @@
     submit.disabled = !entries.length;
     add(
       form,
-      field("확인할 서비스", select),
+      field("확인 환경", select),
+      field("대상 URL", targetURL),
       env,
       field("무엇이 어떻게 동작해야 하나요?", request),
       submit,
@@ -272,19 +321,36 @@
     form.onsubmit = (e) => {
       e.preventDefault();
       guard(async () => {
+        const match = entries.find(
+          ([, t]) => t.base_url === targetURL.value.trim(),
+        );
+        if (!match)
+          throw Error("이 주소는 아직 확인 대상으로 등록되지 않았습니다.");
+        const pendingKey = "proof-intake-pending";
+        const payloadKey = JSON.stringify([match[0], request.value]);
+        let pending;
+        try {
+          pending = JSON.parse(sessionStorage.getItem(pendingKey) || "null");
+        } catch (e) {}
+        if (!pending || pending.payload !== payloadKey) {
+          pending = { payload: payloadKey, key: crypto.randomUUID() };
+          sessionStorage.setItem(pendingKey, JSON.stringify(pending));
+        }
         writeLocal("proof-target", select.value);
         const c = await api("/checks", "POST", {
-          target_ref: select.value,
+          target_ref: match[0],
+          url: targetURL.value.trim(),
           request: request.value,
+          idempotency_key: pending.key,
         });
+        sessionStorage.removeItem(pendingKey);
         writeLocal("proof-request", "");
         location.href = "/checks/" + encodeURIComponent(c.id);
       }, submit);
     };
-    root.append(form);
-    const section = el("section", undefined, "section");
+    const section = el("section", undefined, "section recent-panel");
     add(section, el("h2", "최근 확인"), el("div", undefined, "recent"));
-    root.append(section);
+    root.append(add(el("div", undefined, "dashboard"), form, section));
     refreshHome();
   }
   async function refreshHome() {
@@ -308,6 +374,10 @@
       }
       const ul = el("ul", undefined, "history");
       for (const c of d.checks) {
+        const total = (c.draft?.criteria || []).filter((x) => x.required).length;
+        const coverage = c.latest_verdict
+          ? ` · ${Math.max(0, total - c.missing_count)}개 확인${c.missing_count ? " / " + c.missing_count + "개 미확인" : ""}`
+          : "";
         const li = el("li"),
           a = el("a", c.request);
         a.href = "/checks/" + encodeURIComponent(c.id);
@@ -316,7 +386,7 @@
           add(el("div", undefined, "row between"), a, badge(c.latest_verdict)),
           el(
             "p",
-            `${state.targets[c.target_ref]?.title || c.target_ref} · ${date(c.created_at)}${c.missing_count !== undefined ? " · 확인하지 못한 기준 " + c.missing_count + "개" : ""}`,
+            `${state.targets[c.target_ref]?.title || c.target_ref} · ${date(c.updated_at && !String(c.updated_at).startsWith("0001") ? c.updated_at : c.created_at)}${coverage}`,
             "muted",
           ),
         );
@@ -324,7 +394,7 @@
       }
       list.append(ul);
     } catch (e) {
-      message(e.message);
+      showError(e);
     }
   }
   function inspectDetails(title, data) {
@@ -376,6 +446,7 @@
     root.append(back);
     add(
       root,
+      el("p", "CHECK / " + c.id.slice(0, 8).toUpperCase(), "eyebrow"),
       el("h1", "확인 기준과 결과"),
       el("p", c.request, "check-request"),
     );
@@ -396,6 +467,22 @@
       );
     if (c.plan_error)
       root.append(inspectDetails("기준 생성 오류", c.plan_error));
+    if (c.plan_observation?.status) {
+      const observed = el("details");
+      observed.dataset.key = "plan-observation";
+      add(
+        observed,
+        el("summary", "기준 생성에 참고한 화면"),
+        el("p", c.plan_observation.note || "", "muted"),
+        el(
+          "p",
+          `${c.plan_observation.url || "주소 미확인"} · 컨트롤 ${c.plan_observation.controls?.length || 0}개 · ${date(c.plan_observation.observed_at)}`,
+          "muted",
+        ),
+      );
+      root.append(observed);
+    }
+    if ((c.plan_error || c.question) && !a) renderPlanRecovery(c);
     const scope = el(a ? "details" : "section", undefined, "panel");
     if (a) {
       scope.dataset.key = "scope";
@@ -427,14 +514,67 @@
       root.append(scope);
       renderHistory();
     } else renderDraft(c, target);
-    const tech = inspectDetails("기술 정보", {
+    const tech = inspectDetails("감사 정보", {
       check_id: c.id,
+      attempt_id: a?.id,
+      requested_by: c.created_by,
+      executed_by: a?.actor,
+      approved_at: a?.approved_at,
       revision: c.current_revision,
       contract_hash: c.contract_hash,
       planning: c.planning,
     });
     tech.dataset.key = "technical";
     root.append(tech);
+  }
+  function renderPlanRecovery(c) {
+    const section = el("section", undefined, "panel"),
+      form = el("form");
+    add(
+      section,
+      el(
+        "h2",
+        c.question ? "한 가지만 확인해 주세요" : "기준을 다시 만들 수 있습니다",
+      ),
+    );
+    let answer;
+    if (c.question) {
+      add(section, el("p", c.question));
+      answer = el("textarea");
+      answer.required = true;
+      answer.maxLength = 2000;
+      answer.placeholder = "이 요청에서 반드시 지켜야 할 의미를 적어 주세요.";
+      form.append(field("답변", answer));
+    } else {
+      section.append(
+        el(
+          "p",
+          "연결 상태를 확인한 뒤 같은 요청에서 다시 시도할 수 있습니다.",
+          "muted",
+        ),
+      );
+    }
+    const submit = el(
+      "button",
+      c.question ? "답변하고 기준 다시 만들기" : "기준 다시 만들기",
+      "primary",
+    );
+    submit.type = "submit";
+    form.append(submit);
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      guard(async () => {
+        state.check = await api("/checks/" + c.id + "/plan", "POST", {
+          row_version: c.row_version,
+          answer: answer?.value || "",
+        });
+        state.last = "";
+        detail();
+        schedule();
+      }, submit);
+    };
+    section.append(form);
+    root.append(section);
   }
   function renderDraft(c, target) {
     const section = el("section", undefined, "panel");
@@ -480,6 +620,7 @@
           el("div", undefined, "row"),
           el("h3", x.title),
           el("span", x.required ? "필수" : "참고", "badge"),
+          x.proposed ? el("span", "제안", "badge") : null,
         ),
         el("p", "예상값: " + val(x.expected)),
         el(
@@ -530,7 +671,11 @@
           (r) => r.id === c.id && ["PASS", "FAIL"].includes(r.status),
         ),
     ).length;
-    const s = el("section", undefined, "panel");
+    const s = el(
+      "section",
+      undefined,
+      "panel result-panel " + (a.verdict || a.state || ""),
+    );
     if (active(a)) {
       add(
         s,
@@ -583,10 +728,34 @@
       ),
       el("p", comparisonText(a), "muted"),
     );
+    if (a.action_journal?.length) {
+      const journal = el("details");
+      journal.dataset.key = "journal-" + a.id;
+      journal.append(
+        el(
+          "summary",
+          "실행 단계 " +
+            a.action_journal.filter((e) => e.state === "DONE").length +
+            "/" +
+            a.action_journal.length,
+        ),
+      );
+      const steps = el("ol", undefined, "journal");
+      for (const event of a.action_journal)
+        steps.append(
+          el(
+            "li",
+            `${event.title} · ${{ RUNNING: "진행 중", DONE: "완료", FAILED: "중단" }[event.state] || event.state} · ${date(event.started_at)}`,
+          ),
+        );
+      journal.append(steps);
+      s.append(journal);
+    }
     const ul = el("ul", undefined, "criteria");
     for (const x of a.contract.criteria || []) {
       const r = (a.results || []).find((r) => r.id === x.id),
         li = el("li", undefined, "criterion");
+      if (r?.status) li.classList.add(r.status);
       add(
         li,
         add(
@@ -647,6 +816,13 @@
               shot.rel = "noopener";
               box.append(shot);
             }
+            if (e.before_screenshot) {
+              const before = el("a", "변경 전 화면 보기");
+              before.href = link.href + "?format=before";
+              before.target = "_blank";
+              before.rel = "noopener";
+              box.append(before);
+            }
           }
           d.append(box);
         }
@@ -664,8 +840,69 @@
         btn("결과 복사", () => copyResult(a)),
       );
       s.append(actions);
+      s.append(renderDisposition(a));
     }
     root.append(s);
+  }
+  function renderDisposition(a) {
+    const box = el("details");
+    box.dataset.key = "disposition-" + a.id;
+    box.append(
+      el(
+        "summary",
+        a.disposition
+          ? "내 판단: " +
+              ({
+                ACCEPTED: "확인 완료",
+                DEFERRED: "보류",
+                REJECTED: "반려",
+                OPEN: "미정",
+              }[a.disposition] || a.disposition)
+          : "결과에 대한 내 판단 기록",
+      ),
+    );
+    const form = el("form", undefined, "disposition-form"),
+      select = el("select"),
+      reason = el("input");
+    for (const [value, text] of [
+      ["ACCEPTED", "확인 완료"],
+      ["DEFERRED", "보류"],
+      ["REJECTED", "반려"],
+    ]) {
+      const option = el("option", text);
+      option.value = value;
+      select.append(option);
+    }
+    if (["ACCEPTED", "DEFERRED", "REJECTED"].includes(a.disposition))
+      select.value = a.disposition;
+    reason.maxLength = 500;
+    reason.placeholder = "사유는 선택 사항입니다.";
+    add(form, field("판단", select), field("사유", reason));
+    const save = el("button", "판단 저장", "");
+    save.type = "submit";
+    form.append(save);
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      guard(async () => {
+        await api("/attempts/" + a.id + "/disposition", "POST", {
+          disposition: select.value,
+          reason: reason.value,
+        });
+        await refreshDetail(true);
+        message("내 판단을 기록했습니다. 기술 결과는 바뀌지 않습니다.");
+      }, save);
+    };
+    box.append(form);
+    const latest = a.disposition_history?.at(-1);
+    if (latest)
+      box.append(
+        el(
+          "p",
+          `${latest.actor} · ${date(latest.at)}${latest.reason ? " · " + latest.reason : ""}`,
+          "muted",
+        ),
+      );
+    return box;
   }
   function renderHistory() {
     if (!state.attempts.length) return;
@@ -716,7 +953,14 @@
       return;
     }
     const key =
-      "proof-pending-" + c.id + "-" + c.contract_hash + "-" + registryHash;
+      "proof-pending-" +
+      c.id +
+      "-" +
+      c.contract_hash +
+      "-" +
+      registryHash +
+      "-" +
+      (source?.verdict === "FAIL" ? source.id : "current");
     let id;
     try {
       id = sessionStorage.getItem(key);
@@ -733,6 +977,7 @@
       scope: c.target_ref,
       registry_hash: registryHash,
       idempotency_key: id,
+      baseline: source?.verdict === "FAIL" ? source.id : undefined,
     });
     try {
       sessionStorage.removeItem(key);
@@ -750,6 +995,7 @@
       state.check.request,
       labels[a.verdict] || "확인 불가",
       `환경: ${a.target.environment}; 계정: ${a.target.personas?.[a.contract.persona]?.account || a.contract.persona}`,
+      `실행 ID: ${a.id}`,
       `완료 시각: ${date(a.finished_at)}; 배포: ${versionText(a)}`,
     ];
     for (const c of a.contract.criteria) {
@@ -995,7 +1241,7 @@
           if (location.pathname.startsWith("/checks/")) await refreshDetail();
           else await refreshHome();
         } catch (e) {
-          message(e.message);
+          showError(e);
         } finally {
           schedule();
         }
@@ -1006,23 +1252,66 @@
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
       if (location.pathname.startsWith("/checks/"))
-        refreshDetail().catch((e) => message(e.message));
+        refreshDetail().catch(showError);
       else refreshHome();
     }
     schedule();
   });
+  function login() {
+    clear();
+    message("");
+    add(
+      root,
+      el("h1", "ProofQA에 로그인"),
+      el(
+        "p",
+        "한 계정으로 요청 작성부터 결과 판단까지 이어서 확인합니다.",
+        "intro muted",
+      ),
+    );
+    const form = el("form", undefined, "panel"),
+      name = el("input"),
+      password = el("input");
+    name.required = true;
+    name.autocomplete = "username";
+    password.required = true;
+    password.type = "password";
+    password.autocomplete = "current-password";
+    const submit = el("button", "로그인", "primary");
+    submit.type = "submit";
+    add(form, field("계정", name), field("비밀번호", password), submit);
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      guard(async () => {
+        await api("/login", "POST", {
+          name: name.value,
+          password: password.value,
+        });
+        password.value = "";
+        await boot();
+      }, submit);
+    };
+    root.append(form);
+    name.focus();
+  }
   async function boot() {
     try {
       const [session, registry] = await Promise.all([
         api("/session"),
         api("/registry"),
       ]);
+      state.session = session;
       state.csrf = session.csrf;
       state.targets = registry.targets || {};
+      message("");
       if (location.pathname.startsWith("/checks/")) await refreshDetail(true);
       else home();
       schedule();
     } catch (e) {
+      if (e.status === 401) {
+        login();
+        return;
+      }
       message(e.message);
       root.replaceChildren(btn("다시 불러오기", boot));
     }
