@@ -752,7 +752,7 @@ func (s *Store) EnqueueJob(ctx context.Context, j *model.Job, dedupKey string) (
 func (s *Store) ClaimJob(ctx context.Context, project, worker string, lease time.Duration, kinds ...model.JobKind) (*model.Job, error) {
 	n := now()
 	args := []any{worker, ms(n.Add(lease)), ms(n), project, ms(n)}
-	kindClause := ""
+	kindClause := ` AND kind NOT IN ('PROOF_PLAN','PROOF_RUN')`
 	if len(kinds) > 0 {
 		ph := make([]string, len(kinds))
 		for i, k := range kinds {
@@ -846,7 +846,7 @@ func (s *Store) RestorePreemptedJob(ctx context.Context, id int64, leaseOwner st
 // ReapExpiredLeases returns dead-worker jobs to the ready queue (AC-21).
 func (s *Store) ReapExpiredLeases(ctx context.Context) (int64, error) {
 	t := ms(now())
-	res, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='READY', lease_owner='', lease_expires_at=NULL, last_error='lease expired', updated_at=? WHERE state='LEASED' AND lease_expires_at IS NOT NULL AND lease_expires_at<?`, t, t)
+	res, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='READY', lease_owner='', lease_expires_at=NULL, last_error='lease expired', updated_at=? WHERE kind NOT IN ('PROOF_PLAN','PROOF_RUN') AND state='LEASED' AND lease_expires_at IS NOT NULL AND lease_expires_at<?`, t, t)
 	if err != nil {
 		return 0, err
 	}

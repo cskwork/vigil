@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"time"
 
 	"vigil/internal/dsl"
@@ -8,7 +9,16 @@ import (
 )
 
 // Spec is one execution request for the deterministic QA runner.
+type Hooks interface {
+	Setup(context.Context) error
+	BeforeStep(context.Context, int, string) error
+	AfterStep(context.Context, int, string, bool)
+	Finish(context.Context)
+}
+
 type Spec struct {
+	Hooks Hooks // opt-in request-scoped observation; legacy runs leave nil
+
 	ProjectID string
 	Scenario  *dsl.Scenario
 	Flows     map[string]*dsl.Flow

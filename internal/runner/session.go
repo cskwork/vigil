@@ -71,7 +71,18 @@ func (s *session) execute() {
 			s.urlBeforeAction = s.currentURL()
 		}
 		t0 := time.Now()
-		err := s.runStep(fs.Step, &sr)
+		var err *stepErr
+		if s.spec.Hooks != nil {
+			if e := s.spec.Hooks.BeforeStep(s.pageCtx, i+1, fs.Name); e != nil {
+				err = fail(FailInternal, "%s", e)
+			}
+		}
+		if err == nil {
+			err = s.runStep(fs.Step, &sr)
+		}
+		if s.spec.Hooks != nil {
+			s.spec.Hooks.AfterStep(s.pageCtx, i+1, fs.Name, err == nil)
+		}
 		sr.Duration = time.Since(t0)
 		sr.Expected, sr.Actual = s.red.Redact(sr.Expected), s.red.Redact(sr.Actual)
 		if err == nil {

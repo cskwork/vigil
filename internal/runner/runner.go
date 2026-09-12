@@ -193,7 +193,19 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (*Result, error) {
 	s.mainCtx, s.pageCtx = pageCtx, pageCtx
 	s.closers = append(s.closers, cleanup)
 
+	if spec.Hooks != nil {
+		if err := spec.Hooks.Setup(pageCtx); err != nil {
+			res.Class = FailEnvironment
+			res.Error = err.Error()
+			s.finish()
+			s.closeAll()
+			return res, nil
+		}
+	}
 	s.execute()
+	if spec.Hooks != nil {
+		spec.Hooks.Finish(pageCtx)
+	}
 	s.finish()
 	s.writeEvidence()
 	s.closeAll()

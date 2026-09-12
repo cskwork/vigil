@@ -85,6 +85,7 @@ usage: vigil [-c vigil.yaml] [--json] <command> [flags]
   validate                validate every scenario/flow file on disk
   doctor [--install]      check sqlite, browsers, pi, keys, sandbox, target, evidence dir
 
+  proof --registry <file.json> --local-operator   request-scoped ProofQA UI/API (default 127.0.0.1:8788)
   serve [--addr 127.0.0.1:8787]   read-only live web view (what runs, what the AI agent does)
   loop --ui [addr]               loop + the same live view in-process
 
@@ -138,6 +139,8 @@ func (a *app) run(ctx context.Context, cmd string, args []string) (int, error) {
 	case "help", "-h", "--help":
 		usage()
 		return 0, nil
+	case "proof":
+		return 0, a.cmdProof(ctx, args)
 	case "init":
 		return 0, a.cmdInit()
 	}

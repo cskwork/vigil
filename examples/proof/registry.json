@@ -1,0 +1,321 @@
+{
+  "targets": {
+    "demo": {
+      "template": {
+        "persona": "tester",
+        "fixture": "record",
+        "actions": [
+          "save"
+        ],
+        "criteria": [
+          {
+            "id": "ui",
+            "title": "화면 값이 빈 문자열입니다",
+            "required": true,
+            "observer": "ui",
+            "expected": {
+              "present": true,
+              "data": ""
+            },
+            "source": "definition",
+            "source_ref": "empty"
+          },
+          {
+            "id": "api",
+            "title": "다시 조회한 API 값이 빈 문자열입니다",
+            "required": true,
+            "observer": "api",
+            "expected": {
+              "present": true,
+              "data": ""
+            },
+            "source": "definition",
+            "source_ref": "empty"
+          },
+          {
+            "id": "history",
+            "title": "저장 전후 이력의 키와 값이 보존됩니다",
+            "required": true,
+            "observer": "history",
+            "expected": {
+              "present": true,
+              "data": true
+            },
+            "source": "definition",
+            "source_ref": "preserved"
+          }
+        ]
+      },
+      "version_selector": "#build",
+      "title": "독립 QA 데모",
+      "base_url": "http://127.0.0.1:8790",
+      "environment": "qa",
+      "version": "",
+      "policy_version": "demo-v1",
+      "scope": [
+        {
+          "origin": "http://127.0.0.1:8790",
+          "method": "GET",
+          "path": "/"
+        },
+        {
+          "origin": "http://127.0.0.1:8790",
+          "method": "GET",
+          "path": "/app.js"
+        },
+        {
+          "origin": "http://127.0.0.1:8790",
+          "method": "GET",
+          "path": "/favicon.ico"
+        },
+        {
+          "origin": "http://127.0.0.1:8790",
+          "method": "POST",
+          "path": "/reset"
+        },
+        {
+          "origin": "http://127.0.0.1:8790",
+          "method": "POST",
+          "path": "/record"
+        },
+        {
+          "origin": "http://127.0.0.1:8790",
+          "method": "GET",
+          "path": "/record",
+          "query": {
+            "entity": "qa-record"
+          }
+        }
+      ],
+      "personas": {
+        "tester": {
+          "account": "proof-demo-tester",
+          "setup": null,
+          "secret_env": null
+        }
+      },
+      "fixtures": {
+        "record": {
+          "entity": "qa-record",
+          "qa": true,
+          "prepare_url": "http://127.0.0.1:8790/reset"
+        }
+      },
+      "actions": {
+        "save": {
+          "title": "QA 기록을 빈 값으로 저장하고 다시 조회",
+          "mutating": true,
+          "steps": [
+            {
+              "Name": "",
+              "Goto": "http://127.0.0.1:8790/",
+              "Click": null,
+              "Fill": null,
+              "Type": null,
+              "Press": "",
+              "Select": null,
+              "Hover": null,
+              "WaitFor": null,
+              "WaitMs": 0,
+              "WaitURL": null,
+              "AssertText": null,
+              "AssertNoText": null,
+              "AssertVisible": null,
+              "AssertNotVisible": null,
+              "AssertURL": null,
+              "AssertCount": null,
+              "AssertRequest": null,
+              "AssertAttr": null,
+              "AssertData": null,
+              "ExpectPopup": null,
+              "Eval": null,
+              "UseFlow": "",
+              "Screenshot": ""
+            },
+            {
+              "Name": "",
+              "Goto": "",
+              "Click": null,
+              "Fill": {
+                "By": "css",
+                "Role": "",
+                "Name": "",
+                "Value": "#value",
+                "Text": "",
+                "Exact": false,
+                "Nth": 0,
+                "Timeout": "",
+                "Input": ""
+              },
+              "Type": null,
+              "Press": "",
+              "Select": null,
+              "Hover": null,
+              "WaitFor": null,
+              "WaitMs": 0,
+              "WaitURL": null,
+              "AssertText": null,
+              "AssertNoText": null,
+              "AssertVisible": null,
+              "AssertNotVisible": null,
+              "AssertURL": null,
+              "AssertCount": null,
+              "AssertRequest": null,
+              "AssertAttr": null,
+              "AssertData": null,
+              "ExpectPopup": null,
+              "Eval": null,
+              "UseFlow": "",
+              "Screenshot": ""
+            },
+            {
+              "Name": "",
+              "Goto": "",
+              "Click": {
+                "By": "css",
+                "Role": "",
+                "Name": "",
+                "Value": "#save",
+                "Text": "",
+                "Exact": false,
+                "Nth": 0,
+                "Timeout": ""
+              },
+              "Fill": null,
+              "Type": null,
+              "Press": "",
+              "Select": null,
+              "Hover": null,
+              "WaitFor": null,
+              "WaitMs": 0,
+              "WaitURL": null,
+              "AssertText": null,
+              "AssertNoText": null,
+              "AssertVisible": null,
+              "AssertNotVisible": null,
+              "AssertURL": null,
+              "AssertCount": null,
+              "AssertRequest": null,
+              "AssertAttr": null,
+              "AssertData": null,
+              "ExpectPopup": null,
+              "Eval": null,
+              "UseFlow": "",
+              "Screenshot": ""
+            },
+            {
+              "Name": "",
+              "Goto": "",
+              "Click": null,
+              "Fill": null,
+              "Type": null,
+              "Press": "",
+              "Select": null,
+              "Hover": null,
+              "WaitFor": {
+                "By": "text",
+                "Role": "",
+                "Name": "",
+                "Value": "",
+                "Text": "저장 완료",
+                "Exact": false,
+                "Nth": 0,
+                "Timeout": ""
+              },
+              "WaitMs": 0,
+              "WaitURL": null,
+              "AssertText": null,
+              "AssertNoText": null,
+              "AssertVisible": null,
+              "AssertNotVisible": null,
+              "AssertURL": null,
+              "AssertCount": null,
+              "AssertRequest": null,
+              "AssertAttr": null,
+              "AssertData": null,
+              "ExpectPopup": null,
+              "Eval": null,
+              "UseFlow": "",
+              "Screenshot": ""
+            }
+          ]
+        }
+      },
+      "observers": {
+        "api": {
+          "write_api": {
+            "origin": "http://127.0.0.1:8790",
+            "method": "POST",
+            "path": "/record"
+          },
+          "entity_path": "$.entity",
+          "generation_path": "$.generation",
+          "kind": "network",
+          "action": "save",
+          "api": {
+            "origin": "http://127.0.0.1:8790",
+            "method": "GET",
+            "path": "/record",
+            "query": {
+              "entity": "qa-record"
+            }
+          },
+          "json_path": "$.value",
+          "success_path": "$.success",
+          "success": {
+            "present": true,
+            "data": true
+          },
+          "reread": true
+        },
+        "history": {
+          "kind": "mysql",
+          "action": "save",
+          "success": {
+            "present": false,
+            "data": null
+          },
+          "probe": "history"
+        },
+        "ui": {
+          "kind": "dom",
+          "action": "save",
+          "selector": "#actual",
+          "property": "text",
+          "success": {
+            "present": false,
+            "data": null
+          }
+        }
+      },
+      "definitions": {
+        "empty": {
+          "expected": {
+            "present": true,
+            "data": ""
+          },
+          "title": "빈 문자열"
+        },
+        "preserved": {
+          "expected": {
+            "present": true,
+            "data": true
+          },
+          "title": "이력 보존"
+        }
+      }
+    }
+  },
+  "probes": {
+    "history": {
+      "dsn_env": "PROOF_MYSQL_DSN",
+      "query": "SELECT id,value FROM proof_history WHERE entity=? ORDER BY id",
+      "keys": [
+        "id"
+      ],
+      "fields": [
+        "value"
+      ]
+    }
+  }
+}
