@@ -54,6 +54,12 @@ func NewChromium(binary string, headless bool, logDir string) Provider {
 	return &chromium{binary: binary, headless: headless, logDir: logDir}
 }
 
+// NewTrackedChromium journals ownership immediately after launch so an interrupted
+// proof service can recover only its own process by PID and unique profile.
+func NewTrackedChromium(binary string, headless bool, logDir string, started func(int, string) error) Provider {
+	return &chromium{binary: binary, headless: headless, logDir: logDir, onStarted: started}
+}
+
 // ---- shared helpers -------------------------------------------------------
 
 // FreePort asks the kernel for an unused TCP port on 127.0.0.1.

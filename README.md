@@ -16,6 +16,18 @@ scenario for it. You approve that scenario, and vigil runs it every day.
 
 ---
 
+## One-time checks with ProofQA
+
+`vigil proof` adds a Korean web flow: describe one change, review its criteria,
+approve one run, and read the result and evidence on the same page. It uses the
+existing Chromium runner with registered DOM/API observations and optional
+read-only MySQL probes. Missing evidence remains unverified.
+
+See the [ProofQA setup and independent A/B/C demo](docs/proofqa.md) and
+[implementation verification record](docs/proofqa-verification.md). This mode
+does not start the scheduler, collectors, supervisor, or Jira writes. The
+continuous workflow below remains available through the existing commands.
+
 ## What vigil does
 
 | Stage | What happens |

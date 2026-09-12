@@ -14,9 +14,10 @@ import (
 // chromium launches a Chromium / chrome-headless-shell binary with a remote
 // debugging port bound to 127.0.0.1 and hands out its websocket URL.
 type chromium struct {
-	binary   string
-	headless bool
-	logDir   string
+	onStarted func(int, string) error
+	binary    string
+	headless  bool
+	logDir    string
 
 	mu          sync.Mutex
 	cmd         *exec.Cmd
@@ -115,6 +116,12 @@ func (c *chromium) Ensure(ctx context.Context) (*Endpoint, error) {
 	go func() { exited <- cmd.Wait(); close(exited) }()
 	c.cmd, c.logFile, c.exited, c.port, c.userDataDir = cmd, logFile, exited, port, userDataDir
 
+	if c.onStarted != nil {
+		if err := c.onStarted(cmd.Process.Pid, userDataDir); err != nil {
+			c.stopLocked()
+			return nil, err
+		}
+	}
 	v, err := waitHealthy(ctx, "127.0.0.1", port, exited, 20*time.Second)
 	if err != nil {
 		c.stopLocked()

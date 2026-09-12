@@ -80,6 +80,8 @@ const (
 type JobKind string
 
 const (
+	JobProofPlan         JobKind = "PROOF_PLAN"
+	JobProofRun          JobKind = "PROOF_RUN"
 	JobRunScenario       JobKind = "RUN_SCENARIO"
 	JobAgentDiscover     JobKind = "AGENT_DISCOVER"
 	JobAgentVerify       JobKind = "AGENT_VERIFY"
