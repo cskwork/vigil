@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>할 일, QA 현황판</title>
+<title>할 일, Vigil 관리 콘솔</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
@@ -16,15 +16,18 @@
 <a class="skiplink" href="#main">본문으로 건너뛰기</a>
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
-    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <div class="brand"><a class="brand-home" href="/" aria-label="Vigil 업무 개요"><svg viewBox="0 0 32 32" class="brand-mark" fill="none" aria-hidden="true"><path d="m6 7 10 19L26 7M11 7l5 10 5-10" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg><b>vigil<span>검증 관리</span></b></a></div>
+    <div class="workspace-label"><span class="workspace-dot" aria-hidden="true"></span><span id="brandTarget">대상 불러오는 중</span></div>
+    <p class="nav-section">업무 공간</p>
     <ul class="tree">
-      <li><a href="/" class="active" aria-current="page">할 일 <span class="cnt" id="nTodo"></span></a></li>
-      <li><a href="/results">검증 결과 <span class="cnt" id="nBad"></span></a></li>
-      <li><a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
-      <li><a href="/activity">시스템 활동</a></li>
-      <li><a href="/help">도움말</a></li>
+      <li><a href="/" class="active" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>업무 개요</span><span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-3"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="m8 13 3 3 5-6"/></svg><span>검증 결과</span><span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
+      <li class="nav-divider" aria-hidden="true"></li>
+      <li><a href="/activity"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/help"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
     </ul>
-    <details class="rail-foot" id="railPrefs" open>
+    <details class="rail-foot" id="railPrefs">
       <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
@@ -33,55 +36,51 @@
   </nav>
   <div class="content">
     <header class="topbar">
-      <div class="crumbs">QA 현황판 &rsaquo; <b>할 일</b></div>
+      <div class="crumbs">Vigil 관리 콘솔 &rsaquo; <b>업무 개요</b></div>
       <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
     </header>
     <main id="main" tabindex="-1">
       <div id="fetchErr"></div>
 
-      <section class="hero" aria-label="지금 상태">
-        <h1 id="heroLine"><span class="skel" style="width:14rem"></span></h1>
-        <p id="heroSub">불러오는 중입니다.</p>
-        <p class="sr-only" id="todoStatus" role="status"></p>
-        <p class="hero-links purpose"><a href="#intro" id="introOpen">이 도구가 하는 일</a><a href="/help#tasks">이 화면의 말이 궁금하면 도움말</a></p>
-      </section>
-
-      <details class="intro" id="intro" open hidden>
-        <summary><h2>이 도구는 이렇게 동작합니다</h2></summary>
-        <ol class="steps4">
-          <li><b>1. 감지</b><span>새 커밋, Jira 이슈, 운영 로그에서 확인할 거리를 찾습니다.</span></li>
-          <li><b>2. 재현하고 검사 작성</b><span>AI가 브라우저로 직접 눌러 보고 검사 절차를 만듭니다.</span></li>
-          <li><b>3. 사람 승인</b><span>사람이 확인하고 승인해야 정식 검사가 됩니다.</span></li>
-          <li><b>4. 매일 자동 실행</b><span>승인된 검사는 매일, 그리고 배포 직후에 실행됩니다.</span></li>
-        </ol>
-        <div class="intro-foot"><a href="/help">용어와 자주 하는 작업 보기</a><button class="btn" id="introClose">접어 두기</button></div>
-      </details>
-
-      <section aria-label="확인할 일">
-        <div class="cards" id="cards"></div>
-      </section>
-
-      <section class="panel" id="allClear" aria-label="예정된 자동 검사" hidden>
-        <div class="body" id="allClearBody"></div>
-      </section>
-
-      <details class="panel qa-intake" id="qaIntake">
-        <summary><header><h2>직접 확인 요청하기</h2><p>확인하고 싶은 상황을 평소 말하듯 적으면 AI가 대신 눌러 보고 결과를 보여 줍니다.</p><span class="hint" id="qaHint">펼치기</span></header></summary>
-        <form id="qaForm" class="qa-form">
-          <label for="qaSituation">QA 상황</label>
-          <textarea id="qaSituation" name="situation" rows="3" maxlength="8000" required placeholder="예: 로그인한 뒤 결제 화면에서 뒤로 가기를 누르면 입력한 내용이 유지되는지 확인해 주세요."></textarea>
-          <div class="qa-actions">
-            <p class="sub">읽기 전용으로 실행합니다. 화면을 바꾸는 조작은 하지 않습니다. 진행 중인 AI 작업은 안전하게 대기열로 돌린 뒤 이 요청을 먼저 확인합니다.</p>
-            <button class="btn primary" id="qaSubmit" type="submit">지금 확인</button>
-          </div>
-          <p id="qaFeedback" class="qa-feedback" role="status" aria-live="polite"></p>
-        </form>
-      </details>
-
-      <section class="panel" aria-label="최근 활동">
-        <header><h2>최근 활동</h2><p>사람이 시키지 않아도 방금 실행된 검사들입니다.</p><a class="act" href="/results">검증 결과 전체 보기</a></header>
-        <div class="body" id="recent"><div class="skel"></div><div class="skel"></div></div>
-      </section>
+      <div class="overview-heading">
+        <div><h1>업무 개요</h1><p>검토할 항목과 서비스 검증 현황을 확인하세요.</p></div>
+        <a class="btn primary new-request" href="#qaIntake"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>검증 요청 작성</a>
+      </div>
+      <div class="runtime-note" id="runtimeNote" role="status">실행기 연결 상태를 확인하고 있습니다.</div>
+      <nav class="work-summary" aria-label="업무 상태별 바로가기">
+        <a href="/scripts?state=PENDING_APPROVAL"><span>승인 대기</span><strong id="summaryPending">–</strong><small>검사 절차 검토</small></a>
+        <a href="/results?outcome=APP_FAILURE"><span>서비스 문제</span><strong id="summaryFailures">–</strong><small>실패 원인 확인</small></a>
+        <a href="/scripts?state=NEEDS_REVIEW"><span>검토 필요</span><strong id="summaryReview">–</strong><small>판단과 후속 조치</small></a>
+        <a href="/scripts?state=ACTIVE"><span>정기 검사</span><strong id="summaryActive">–</strong><small>승인된 검사 항목</small></a>
+      </nav>
+      <div class="overview-grid">
+        <div class="work-column">
+          <section class="panel work-inbox" aria-label="확인할 일">
+            <header><div><h2>처리할 일 <span class="section-count" id="workCount">–</span></h2><p id="heroLine">업무 상태를 불러오는 중입니다.</p></div><a href="/scripts?state=PENDING_APPROVAL" class="section-link">승인 대기 보기</a></header>
+            <div class="cards" id="cards"></div>
+            <div id="allClear" hidden><div id="allClearBody"></div></div>
+            <p class="sr-only" id="todoStatus" role="status"></p>
+          </section>
+          <section class="panel recent-panel" aria-label="최근 검증">
+            <header><div><h2>최근 검증</h2><p id="heroSub">실행 결과를 불러오는 중입니다.</p></div><a class="section-link" href="/results">전체 결과 보기</a></header>
+            <div class="body" id="recent"><div class="skel"></div><div class="skel"></div></div>
+          </section>
+          <details class="panel qa-intake" id="qaIntake">
+            <summary><header><h2>새 검증 요청</h2><p>확인할 화면과 기대하는 동작을 입력하세요.</p><span class="hint" id="qaHint">펼치기</span></header></summary>
+            <form id="qaForm" class="qa-form">
+              <label for="qaSituation">검증할 내용</label>
+              <textarea id="qaSituation" name="situation" rows="4" maxlength="8000" required aria-describedby="requestAvailability" placeholder="예: 네이버 메인에서 검색어를 입력하고 검색하면, 결과 화면에 입력한 검색어가 표시되어야 합니다."></textarea>
+              <div class="qa-actions"><p class="sub" id="requestAvailability">데이터를 변경하지 않는 범위에서 확인합니다.</p><button class="btn primary" id="qaSubmit" type="submit" disabled>검증 요청 접수</button></div>
+              <p id="qaFeedback" class="qa-feedback" role="status" aria-live="polite"></p>
+            </form>
+          </details>
+        </div>
+        <aside class="context-column" aria-label="검증 대상과 실행 정보">
+          <section class="panel target-panel"><header><h2>검증 대상</h2></header><div class="body"><div class="target-monogram" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg></div><h3 id="targetName">대상 불러오는 중</h3><a id="targetURL" class="target-url" target="_blank" rel="noopener noreferrer"></a><dl class="context-list"><dt>프로젝트</dt><dd id="projectName">–</dd><dt>요청 접수</dt><dd id="runnerState">확인 중</dd></dl></div></section>
+          <section class="panel"><header><h2>정기 검증</h2></header><div class="body"><dl class="context-list"><dt>등록된 검사</dt><dd id="dailyCount">–</dd><dt>설정된 주기</dt><dd id="dailyTime">–</dd><dt>다음 일정</dt><dd id="nextRun">–</dd></dl><p class="sub" id="scheduleNote"></p><a href="/activity#schedule" class="section-link">실행 설정 확인</a></div></section>
+          <section class="workflow-guide"><h2>요청부터 결과까지</h2><ol><li><b>검증 요청</b><span>화면과 기대 동작을 전달합니다.</span></li><li><b>검사 검토·승인</b><span>제안된 절차와 기준을 확인합니다.</span></li><li><b>결과 확인</b><span>실행 결과와 증거를 검토합니다.</span></li></ol><a href="/help" class="section-link">이용 가이드</a></section>
+        </aside>
+      </div>
     </main>
   </div>
 </div>
@@ -89,12 +88,6 @@
 <script src="/ui/app.js"></script>
 <script>
 let data = null;
-
-// 첫 방문에는 4단계 안내를 펼쳐 두고, 접은 뒤에는 히어로의 '이 도구가 하는 일'
-// 링크로 언제든 다시 펼칩니다. 저장 키는 그대로라 이미 접어 둔 사람은 그대로입니다.
-if (store.get('vigil.intro') !== 'done') { $('intro').hidden = false; foldOnNarrow($('intro')); }
-$('introClose').onclick = () => { store.set('vigil.intro', 'done'); $('intro').hidden = true; $('introOpen').focus(); };
-$('introOpen').onclick = (e) => { e.preventDefault(); $('intro').hidden = false; $('intro').open = true; $('intro').querySelector('summary').focus(); };
 
 // the request box stays folded until asked for; the choice is remembered
 $('qaIntake').open = store.on('vigil.intake');
@@ -116,7 +109,7 @@ let qaSubmitting = false;
 $('qaForm').onsubmit = async (e) => {
   e.preventDefault();
   const situation = $('qaSituation').value.trim();
-  if (!situation || qaSubmitting) return;
+  if (!situation || qaSubmitting || !data?.can_request) return;
   qaSubmitting = true;
   $('qaSubmit').disabled = true;
   $('qaSubmit').textContent = '접수 중';
@@ -136,8 +129,8 @@ $('qaForm').onsubmit = async (e) => {
     $('qaFeedback').textContent = err.message;
   } finally {
     qaSubmitting = false;
-    $('qaSubmit').disabled = false;
-    $('qaSubmit').textContent = '지금 확인';
+    $('qaSubmit').disabled = !data?.can_request;
+    $('qaSubmit').textContent = '검증 요청 접수';
     $('qaForm').removeAttribute('aria-busy');
   }
 };
@@ -184,54 +177,39 @@ const CARDS = [
 
 function render() {
   const d = data; if (!d) return;
-  const c = d.counts || {}, total = c.total || 0;
+  const c = d.counts || {}, total = c.total || 0, h = d.hero || {}, recent = d.recent || [];
   railCounts(c);
-  document.title = (total ? `할 일 ${total}건, ` : '') + 'QA 현황판';
-
-  $('heroLine').textContent = total ? `지금 확인할 일 ${total}건` : '지금 확인할 일이 없습니다';
-  $('heroLine').className = total ? 'busy' : 'clear';
-  const h = d.hero || {};
+  document.title = (total ? `처리할 일 ${total}건 · ` : '') + '업무 개요 · Vigil';
+  $('heroLine').textContent = total ? '검토와 후속 조치가 필요한 항목입니다.' : '현재 처리 대기 중인 항목이 없습니다.';
   $('heroSub').textContent = h.runs
-    ? `최근 ${h.window_hours || 1}시간 동안 자동 검사 ${h.runs}건을 실행했고 ${h.failures}건이 실패했습니다.`
-    : `최근 ${h.window_hours || 1}시간 동안 실행된 자동 검사가 없습니다.`;
-
-  const status = total ? `확인할 일 ${total}건, 승인 대기 ${c.pending_approval || 0}건` : '지금 확인할 일이 없습니다';
-  if ($('todoStatus').textContent !== status) $('todoStatus').textContent = status;
-
-  setHTML('cards', CARDS.filter(card => (c[card.key] || 0) > 0).map(card => {
-    const n = c[card.key];
-    return `<article class="card ${card.tone}">
-      <h2>${st({ x: [card.title(n), card.tone] }, 'x')}</h2>
-      <p>${esc(card.why)}</p>
-      <a class="btn primary" href="${card.href}">${esc(card.cta)}</a>
-    </article>`;
-  }).join(''));
-
-  const clear = $('allClear');
-  clear.hidden = total > 0;
-  if (!total) {
-    setHTML('allClearBody', `<div class="clear-panel">
-      <p><b>모두 확인된 상태입니다.</b> 사람이 지금 해야 할 일은 없습니다.</p>
-      <ul>
-        <li>다음 자동 검사: <b>${d.next_run_at ? esc(when(d.next_run_at)) + ' (' + esc(until(d.next_run_at)) + ')' : '예정 없음'}</b></li>
-        <li>매일 자동으로 도는 검사: <b>${d.daily_count || 0}건</b>${d.daily_at ? ` · 매일 ${esc(d.daily_at)}` : ''}</li>
-      </ul>
-      <p class="sub">확인하고 싶은 화면이 있으면 아래 <b>직접 확인 요청하기</b>에 상황을 적어 주세요.${d.can_request ? '' : ' 지금은 이 화면에 실행기가 붙어 있지 않아 접수만 막혀 있습니다. 터미널에서 <span class="mono">vigil loop --ui 127.0.0.1:8787</span>로 실행하면 사용할 수 있습니다.'}</p>
-      <button class="btn primary" id="openIntake">직접 확인 요청하기</button>
-    </div>`);
-    const b = $('openIntake');
-    if (b) b.onclick = () => openIntake();
-  }
-
-  const recent = d.recent || [];
+    ? `최근 ${h.window_hours || 1}시간 · ${h.runs}건 실행 · 서비스 문제 ${h.failures}건`
+    : `최근 ${h.window_hours || 1}시간 동안 실행된 검사가 없습니다.`;
+  if(d.on_demand){ document.querySelector('.new-request').href=projectURL('/scripts#import'); document.querySelector('.new-request').lastChild.textContent='검사 만들기'; $('qaIntake').hidden=true; }
+  $('workCount').textContent = total;
+  $('summaryPending').textContent = c.pending_approval || 0;
+  $('summaryFailures').textContent = c.app_failure || 0;
+  $('summaryReview').textContent = c.needs_review || 0;
+  $('summaryActive').textContent = d.daily_count || 0;
+  $('todoStatus').textContent = `처리할 일 ${total}건, 승인 대기 ${c.pending_approval || 0}건`;
+  $('runtimeNote').classList.toggle('connected', !!d.can_request);
+  $('runtimeNote').textContent = d.on_demand ? '시나리오를 적으면 에이전트가 검사 스크립트를 만들고 실행합니다.' : d.can_request ? '요청 접수 가능 · 새 검증 요청을 등록할 수 있습니다.' : '조회 모드 · 결과를 조회할 수 있습니다. 새 검증 요청은 실행기 연결 후 접수할 수 있습니다.';
+  $('requestAvailability').textContent = d.can_request ? '데이터를 변경하지 않는 범위에서 확인합니다.' : '실행기가 연결되어 있지 않아 접수할 수 없습니다. 작성 중인 내용은 화면에 유지됩니다.';
+  $('qaSubmit').disabled = qaSubmitting || !d.can_request;
+  $('runnerState').textContent = d.on_demand ? '시나리오 요청 가능' : d.can_request ? '접수 가능' : '실행기 연결 필요';
+  $('projectName').textContent = projectDisplayName || d.project || '미지정';
+  try { const u = new URL(d.target); $('targetName').textContent = u.hostname; $('targetURL').textContent = d.target; if (['https:', 'http:'].includes(u.protocol)) $('targetURL').href = u.href; } catch { $('targetName').textContent = d.target || '미지정'; $('targetURL').removeAttribute('href'); }
+  $('dailyCount').textContent = `${d.daily_count || 0}건`;
+  $('dailyTime').textContent = d.daily_at ? `매일 ${d.daily_at}` : '미설정';
+  $('nextRun').textContent = d.on_demand ? '수동 실행' : d.daily_count && d.next_run_at ? when(d.next_run_at) : '예정된 정기 검사 없음';
+  $('scheduleNote').textContent = d.on_demand ? '이 관리 콘솔은 요청한 검사만 실행합니다. 정기 검증은 별도 실행기가 필요합니다.' : !d.daily_count ? '검사를 승인하면 정기 검증 대상에 추가됩니다.' : !d.can_request ? '설정된 일정입니다. 현재 실행기 동작은 확인할 수 없습니다.' : '승인된 검사에 설정된 일정입니다.';
+  setHTML('cards', CARDS.filter(card => (c[card.key] || 0) > 0).map(card => `<article class="work-row">
+    <div><h3>${st({ x: [card.title(c[card.key]), card.tone] }, 'x')}</h3><p>${esc(card.why)}</p></div><a class="btn" href="${card.href}">${esc(card.cta)}</a>
+  </article>`).join(''));
+  $('allClear').hidden = total > 0;
+  if (!total) setHTML('allClearBody', `<div class="inbox-empty"><svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="11" y="7" width="26" height="34" rx="3"/><path d="M18 17h12M18 24h12M18 31h7"/></svg><h3>${recent.length ? '처리할 항목이 없습니다' : '첫 검증을 준비하세요'}</h3><p>${recent.length ? '최근 검증 결과와 근거를 확인할 수 있습니다.' : '아직 검증 이력이 없습니다. 확인할 내용을 작성하고 검사 절차를 검토해 보세요.'}</p><a href="${recent.length ? '/results' : d.on_demand ? '/scripts#import' : '#qaIntake'}" class="section-link">${recent.length ? '검증 결과 확인' : d.on_demand ? '검사 만들기' : '검증 요청 작성'}</a></div>`);
   const recentHTML = recent.length ? `<ul class="feed">${recent.map(r => `<li>
-      ${r.cause ? '' : stTip(OUTCOME, r.outcome)}
-      <span class="t">${esc(r.title || r.scenario_id)}</span>
-      <span class="sub">${esc(BROWSER[r.browser] || r.browser || '')}${r.environment ? ' · 환경 ' + esc(r.environment) : ''}</span>
-      <span class="sub when">${esc(ago(r.at))}</span>
-      ${causeHTML(r, 'trun' + r.run_id)}
-    </li>`).join('')}</ul><p class="sub">자세한 결과와 증거는 <a href="/results">검증 결과</a>에서 봅니다.</p>`
-    : `<div class="empty"><b>아직 실행된 검사가 없습니다</b>확인하고 싶은 화면이 있으면 <a href="#qaIntake">직접 확인 요청하기</a>에 상황을 적어 주세요. 승인된 검사가 생기면 이 자리에 자동 실행 기록이 쌓입니다.<p class="dev sub">터미널에서는 <span class="mono">vigil run &lt;검사 이름&gt;</span>으로 한 번 실행해 볼 수 있습니다.</p></div>`;
+    ${r.cause ? '' : stTip(OUTCOME, r.outcome)}<span class="t">${esc(r.title || r.scenario_id)}</span><span class="sub">${r.environment ? '환경 ' + esc(r.environment) : ''}</span><span class="sub when">${esc(ago(r.at))}</span>${causeHTML(r, 'trun' + r.run_id)}
+  </li>`).join('')}</ul>` : '<div class="recent-empty"><p>아직 기록된 실행 결과가 없습니다.</p><span>검증이 실행되면 결과와 확인 근거가 여기에 표시됩니다.</span></div>';
   if (setHTML('recent', recentHTML)) bindCause($('recent'));
 }
 

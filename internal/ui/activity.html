@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>시스템 활동, QA 현황판</title>
+<title>시스템 활동, Vigil 관리 콘솔</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
@@ -34,28 +34,18 @@
 <a class="skiplink" href="#main">본문으로 건너뛰기</a>
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
-    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <div class="brand"><a class="brand-home" href="/" aria-label="Vigil 업무 개요"><svg viewBox="0 0 32 32" class="brand-mark" fill="none" aria-hidden="true"><path d="m6 7 10 19L26 7M11 7l5 10 5-10" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg><b>vigil<span>검증 관리</span></b></a></div>
+    <div class="workspace-label"><span class="workspace-dot" aria-hidden="true"></span><span id="brandTarget">대상 불러오는 중</span></div>
+    <p class="nav-section">업무 공간</p>
     <ul class="tree">
-      <li><a href="/">할 일 <span class="cnt" id="nTodo"></span></a></li>
-      <li><a href="/results">검증 결과 <span class="cnt" id="nBad"></span></a></li>
-      <li><a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
-      <li>
-        <a href="/activity" class="active" aria-current="page">시스템 활동</a>
-        <ul class="subtree" aria-label="시스템 활동 화면의 구역">
-          <li><a href="#overview" class="active" aria-current="location">개요</a></li>
-          <li><a href="#now">진행 상황 <span class="cnt" id="nNow"></span></a></li>
-          <li><a href="#ai">AI 도우미</a></li>
-          <li><a href="#window">검사 시간대</a></li>
-          <li><a href="#supervisor">커버리지 확장</a></li>
-          <li><a href="#checks">검사 항목 <span class="cnt" id="nChecks"></span></a></li>
-          <li><a href="#issues">발견된 문제 <span class="cnt" id="nIssues"></span></a></li>
-          <li><a href="#history">검사 기록</a></li>
-          <li><a href="#deploys">배포 변경 <span class="cnt" id="nDeploys"></span></a></li>
-        </ul>
-      </li>
-      <li><a href="/help">도움말</a></li>
+      <li><a href="/"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>업무 개요</span><span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-3"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="m8 13 3 3 5-6"/></svg><span>검증 결과</span><span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
+      <li class="nav-divider" aria-hidden="true"></li>
+      <li><a href="/activity" class="active" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/help"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
     </ul>
-    <details class="rail-foot" id="railPrefs" open>
+    <details class="rail-foot" id="railPrefs">
       <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
@@ -64,7 +54,7 @@
   </nav>
   <div class="content">
     <header class="topbar">
-      <div class="crumbs">QA 현황판 &rsaquo; 시스템 활동 &rsaquo; <b id="crumb">개요</b></div>
+      <div class="crumbs">Vigil 관리 콘솔 &rsaquo; 시스템 활동 &rsaquo; <b id="crumb">개요</b></div>
       <div class="search"><input type="search" id="q" placeholder="검사 항목 검색 (예: 교사 입장)" aria-label="검사 항목 검색"></div>
       <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
     </header>
@@ -197,7 +187,7 @@ $('q').oninput = (e) => { queryRaw = e.target.value; query = queryRaw.trim().toL
 // 다른 두 화면과 같은 주소 계약입니다. 검색어는 q, 정렬은 sort 에 남깁니다.
 // 주소가 그대로면 새 탭에서 열어도 같은 화면이 재현됩니다.
 function syncURL() {
-  const p = new URLSearchParams();
+  const p = new URLSearchParams(); if (selectedProject) p.set('project', selectedProject);
   if (queryRaw.trim()) p.set('q', queryRaw.trim());
   if (sort) p.set('sort', sortParam(sort));
   history.replaceState(null, '', (p.toString() ? '?' + p.toString() : location.pathname) + location.hash);
@@ -316,7 +306,7 @@ function render() {
       <td class="hide-sm when" data-lab="다음 검사">${['ACTIVE', 'SOAK'].includes(s.state) ? esc(until(s.next_due_at)) : '<span class="sub">예정 없음</span>'}</td>
       <td class="num hide-sm" data-lab="검사 / 정상">${s.runs} / ${s.passes}${s.flakes ? `<div class="sub">다시 하니 통과 ${s.flakes}회</div>` : ''}</td>
       <td class="hide-sm when" data-lab="중요도">${esc(CLASS[s.class] || s.class)}</td></tr>`).join('')
-    : `<tr><td colspan="5" class="empty">${query ? `<b>"${esc(query)}"에 맞는 검사 항목이 없습니다</b>검색어를 지우면 전체 목록이 보입니다.` : '<b>등록된 검사 항목이 없습니다</b>확인하고 싶은 화면이 있으면 <a href="/#qaIntake">할 일 화면에서 직접 확인 요청하기</a>에 상황을 적어 주세요. AI가 대신 눌러 보고 검사 절차를 만듭니다.<p class="dev sub">터미널에서는 scenarios 폴더에 검사 파일을 넣고 <span class="mono">vigil add</span>를 실행합니다.</p>'}</td></tr>`;
+    : `<tr><td colspan="5" class="empty">${query ? `<b>"${esc(query)}"에 맞는 검사 항목이 없습니다</b>검색어를 지우면 전체 목록이 보입니다.` : '<b>등록된 검사 항목이 없습니다</b>확인하고 싶은 화면이 있으면 <a href="/#qaIntake">업무 개요 화면에서 직접 확인 요청하기</a>에 상황을 적어 주세요. AI가 대신 눌러 보고 검사 절차를 만듭니다.<p class="dev sub">터미널에서는 scenarios 폴더에 검사 파일을 넣고 <span class="mono">vigil add</span>를 실행합니다.</p>'}</td></tr>`;
   $('moreChecks').innerHTML = visScs.length > pageScs.length ? `<button class="btn" id="moreChecksBtn">더 보기 (+${visScs.length - pageScs.length})</button>` : '';
   const mcb = $('moreChecksBtn'); if (mcb) mcb.onclick = () => { shownScs += PAGE_SIZE; rerender(render); };
   $('legend').innerHTML = `${st(OUTCOME, 'PASS')} 약속대로 동작 &nbsp; ${st(OUTCOME, 'APP_FAILURE')} 약속과 다르게 동작, 개발팀 확인 &nbsp; ${st(OUTCOME, 'SCRIPT_DRIFT')} 화면 구조가 바뀌어 검사 자체를 고쳐야 함 &nbsp; ${st(OUTCOME, 'ENV_FAILURE')} 네트워크나 로그인 등 검사 환경 문제`;

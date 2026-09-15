@@ -43,6 +43,7 @@ func (s *Server) submitRequest(w http.ResponseWriter, r *http.Request) {
 
 	var in struct {
 		Situation string `json:"situation"`
+		Site      string `json:"site,omitempty"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes))
 	dec.DisallowUnknownFields()
@@ -52,7 +53,7 @@ func (s *Server) submitRequest(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusRequestEntityTooLarge, "상황 설명이 너무 깁니다")
 			return
 		}
-		writeAPIError(w, http.StatusBadRequest, "본문은 situation 한 필드만 가진 JSON이어야 합니다")
+		writeAPIError(w, http.StatusBadRequest, "본문은 situation과 선택적인 site 필드를 가진 JSON이어야 합니다")
 		return
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
@@ -70,13 +71,27 @@ func (s *Server) submitRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	featureID, jobID, err := s.requestSubmitter.SubmitUserRequest(r.Context(), in.Situation)
+	var featureID string
+	var jobID int64
+	if submitter, ok := s.requestSubmitter.(SiteRequestSubmitter); ok {
+		featureID, jobID, err = submitter.SubmitUserRequestAt(r.Context(), in.Situation, in.Site)
+	} else if in.Site != "" {
+		writeAPIError(w, http.StatusBadRequest, "이 실행기는 사이트 선택을 지원하지 않습니다")
+		return
+	} else {
+		featureID, jobID, err = s.requestSubmitter.SubmitUserRequest(r.Context(), in.Situation)
+	}
 	if err != nil {
 		if featureID != "" && jobID != 0 {
 			writeJSONStatus(w, http.StatusAccepted, requestReceipt{
 				FeatureID: featureID, JobID: jobID, Status: "queued",
 				Warning: "요청은 접수됐지만 기존 작업 중단을 확인하지 못했습니다. 대기열 우선순위로 진행합니다.",
 			})
+			return
+		}
+		var conflict interface{ BusyRequest() bool }
+		if errors.As(err, &conflict) && conflict.BusyRequest() {
+			writeAPIError(w, http.StatusConflict, err.Error())
 			return
 		}
 		var invalid interface{ InvalidRequest() bool }
@@ -151,3 +166,6 @@ func canonicalHost(host, scheme string) string {
 func writeAPIError(w http.ResponseWriter, status int, message string) {
 	writeJSONStatus(w, status, map[string]string{"error": message})
 }
+
+// SameOrigin exposes the dashboard write-origin policy to the admin router.
+func SameOrigin(r *http.Request) bool { return hasSameOrigin(r) }

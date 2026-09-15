@@ -428,7 +428,7 @@ func (o *Orchestrator) gateCandidate(ctx context.Context, job *model.Job, feat *
 		g.Reason = err.Error()
 		return g
 	}
-	reproduce := isReproduce(job, feat)
+	reproduce := isReproduce(job, feat) || (p.Request != nil && p.Request.Instructions != "")
 	if err := sc.Validate(flowIDs); err != nil {
 		// An invalid script is usually a wrong locator kind or a missing field,
 		// not a reason to spend a human's attention: keep the raw text as a
@@ -589,7 +589,7 @@ func (o *Orchestrator) retryFix(ctx context.Context, scenarioID string, job *mod
 		Priority:   priority,
 		ScenarioID: scenarioID,
 		FeatureID:  p.FeatureID,
-		Payload:    jobPayload{ScenarioID: scenarioID, FeatureID: p.FeatureID, ShippedSHA: p.ShippedSHA, RunID: p.RunID, Trigger: "validation-retry", ValidationError: p.ValidationError, Operator: operator}.String(),
+		Payload:    jobPayload{Request: p.Request, ScenarioID: scenarioID, FeatureID: p.FeatureID, ShippedSHA: p.ShippedSHA, RunID: p.RunID, Trigger: "validation-retry", ValidationError: p.ValidationError, Operator: operator}.String(),
 	}
 	// The never-resetting sequence is in the dedup key: without it a second
 	// repair of the same version is silently dropped, and after a counter reset
@@ -753,6 +753,7 @@ func (o *Orchestrator) validateByRun(ctx context.Context, job *model.Job, id str
 		FeatureID:       p.FeatureID,
 		ShippedSHA:      p.ShippedSHA,
 		Browser:         browser,
+		Environment:     spec.Environment,
 		Outcome:         outcome,
 		Attempt:         1,
 		StartedAt:       start,
@@ -1014,7 +1015,7 @@ func (o *Orchestrator) gateRepair(ctx context.Context, job *model.Job, p jobPayl
 	if err != nil {
 		return review("patch validation not possible: " + err.Error())
 	}
-	reproduce := !model.IsShipKind(m.SourceKind) && m.SourceKind != ""
+	reproduce := (!model.IsShipKind(m.SourceKind) && m.SourceKind != "") || (p.Request != nil && p.Request.Instructions != "")
 	if !candidate && outcome != model.OutcomePass && !(reproduce && outcome == model.OutcomeAppFailure) {
 		return review(fmt.Sprintf("patch validation run %s: %s", outcome, detail))
 	}

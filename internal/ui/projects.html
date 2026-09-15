@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>프로젝트·사이트 · Vigil</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"></noscript>
+<link rel="stylesheet" href="/ui/theme.css">
+</head>
+<body>
+<a class="skiplink" href="#main">본문으로 건너뛰기</a>
+<div class="shell">
+  <nav class="rail" aria-label="주 메뉴">
+    <div class="brand"><a class="brand-home" href="/" aria-label="Vigil 업무 개요"><svg viewBox="0 0 32 32" class="brand-mark" fill="none" aria-hidden="true"><path d="m6 7 10 19L26 7M11 7l5 10 5-10" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg><b>vigil<span>검증 관리</span></b></a></div>
+    <div class="workspace-label"><span class="workspace-dot" aria-hidden="true"></span><span id="brandTarget">대상 불러오는 중</span></div>
+    <p class="nav-section">업무 공간</p>
+    <ul class="tree">
+      <li><a href="/" class="active" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>업무 개요</span><span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-3"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="m8 13 3 3 5-6"/></svg><span>검증 결과</span><span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
+      <li class="nav-divider" aria-hidden="true"></li>
+      <li><a href="/activity"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/help"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
+    </ul>
+    <details class="rail-foot" id="railPrefs">
+      <summary>화면 설정</summary>
+      <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
+      <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
+      <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
+    </details>
+  </nav>
+  <div class="content">
+    <header class="topbar">
+      <div class="crumbs">Vigil 관리 콘솔 &rsaquo; <b>프로젝트·사이트</b></div>
+      <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
+    </header>
+    <main id="main" tabindex="-1">
+      <div class="overview-heading"><div><h1>프로젝트·사이트</h1><p>프로젝트별 검증 대상과 기본 사이트를 관리합니다.</p></div><button class="btn primary" id="newProject">프로젝트 추가</button></div>
+      <div id="fetchErr"></div>
+      <div class="settings-layout"><nav class="project-list" id="projectList" aria-label="등록된 프로젝트"></nav><section class="panel"><header><h2 id="formTitle">프로젝트 정보</h2></header>
+      <form id="projectForm" class="admin-form"><div class="form-grid"><label>프로젝트 이름<input id="projectNameInput" maxlength="80" required placeholder="예: 네이버 서비스"></label><details class="advanced"><summary>고급 설정 · 프로젝트 ID</summary><label>프로젝트 ID<input id="projectID" required pattern="[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}" maxlength="64" placeholder="자동 생성"></label></details></div><div id="siteEditors"></div><button type="button" class="btn" id="addSite">사이트 추가</button><div class="form-actions"><p class="form-note">변경한 URL은 다음 실행부터 적용됩니다.</p><button class="btn primary" id="saveProject">변경사항 저장</button></div><p id="saveFeedback" class="qa-feedback" role="status"></p></form>
+      </section></div>
+    </main>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/ui/app.js"></script>
+<script>
+let registry=null, editing=null, saving=false;
+const newSite = (n) => ({id:n===0?'main':'site-'+crypto.randomUUID().slice(0,8),name:n===0?'메인 사이트':'',url:'',allowed_hosts:[],read_only:true});
+function collectSites(){return [...document.querySelectorAll('.site-editor')].map((el,i)=>({id:el.querySelector('[name=siteID]').value.trim(),name:el.querySelector('[name=siteName]').value.trim(),url:el.querySelector('[name=siteURL]').value.trim(),allowed_hosts:el.querySelector('[name=hosts]').value.split(',').map(x=>x.trim()).filter(Boolean),read_only:el.querySelector('[name=readOnly]').checked,primary:el.querySelector('[name=primary]').checked}));}
+function renderSites(sites){$('siteEditors').innerHTML=sites.map((s,i)=>`<section class="site-editor"><h3>사이트 ${i+1}</h3><div class="form-grid"><label>사이트 이름<input name="siteName" value="${esc(s.name)}" required maxlength="80" placeholder="예: 운영 사이트"></label><label>검증 URL<input name="siteURL" type="url" value="${esc(s.url)}" placeholder="https://www.naver.com/" required></label></div><label class="inline"><input type="radio" name="primary" value="${i}" ${(s.primary??(editing?.default_site===s.id||!editing&&i===0))?'checked':''}>기본 검증 사이트</label><details class="advanced"><summary>고급 설정 · 접근 범위와 사이트 ID</summary><div class="form-grid"><label>사이트 ID<input name="siteID" value="${esc(s.id)}" ${editing?.sites.some(old=>old.id===s.id)?'readonly':''} required pattern="[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}" maxlength="64"></label><label>추가 허용 호스트<input name="hosts" value="${esc((s.allowed_hosts||[]).join(', '))}" placeholder="예: search.naver.com"></label></div><p class="form-note">URL의 호스트는 자동으로 허용됩니다. 다른 호스트로 이동해야 할 때만 추가하세요.</p><label class="inline"><input type="checkbox" name="readOnly" ${s.read_only?'checked':''}>읽기 전용 검사만 허용</label></details></section>`).join('');}
+
+function editProject(p){editing=p?structuredClone(p):null;$('formTitle').textContent=p?'프로젝트 정보':'새 프로젝트';$('projectID').value=p?.id||'project-'+crypto.randomUUID().slice(0,8);$('projectID').readOnly=!!p;$('projectNameInput').value=p?.name||'';$('saveFeedback').textContent='';$('saveProject').textContent=p?'변경사항 저장':'프로젝트 등록';renderSites(p?.sites||[newSite(0)]);renderList();}
+function renderList(){$('projectList').innerHTML=(registry?.projects||[]).map(p=>`<button type="button" data-project="${esc(p.id)}" aria-current="${editing?.id===p.id}">${esc(p.name)}<small>${p.sites.length}개 사이트</small></button>`).join('');for(const b of $('projectList').querySelectorAll('button'))b.onclick=()=>{if(!saving)editProject(registry.projects.find(p=>p.id===b.dataset.project))};}
+$('newProject').onclick=()=>{if(!saving){editProject(null);$('projectNameInput').focus()}};
+$('addSite').onclick=()=>{const sites=collectSites();sites.push(newSite(sites.length));renderSites(sites)};
+$('projectForm').onsubmit=async e=>{e.preventDefault();if(saving)return;const sites=collectSites(),primary=sites.find(s=>s.primary);if(!primary){$('saveFeedback').textContent='기본 검증 사이트를 선택하세요.';return}const p={id:$('projectID').value.trim(),name:$('projectNameInput').value.trim(),revision:editing?.revision||0,default_site:primary.id,sites:sites.map(({primary,...s})=>s)};saving=true;$('saveProject').disabled=true;$('saveFeedback').textContent='저장 중입니다.';try{const r=await fetch('/api/projects',{method:editing?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});if(!r.ok)throw await httpFail(r,'프로젝트를 저장하지 못했습니다.');await r.json();location.href='/projects?project='+encodeURIComponent(p.id)}catch(e){$('saveFeedback').textContent=e.message;$('saveFeedback').className='qa-feedback error'}finally{saving=false;$('saveProject').disabled=false}};
+projectRegistry.then(r=>{registry=r;if(!r){$('fetchErr').innerHTML='<p class="errbox">프로젝트 관리 서버에 연결하지 못했습니다. 페이지를 새로고침하세요.</p>';$('saveProject').disabled=true;return}editProject(r.projects.find(p=>p.id===(selectedProject||r.default_project))||r.projects[0]);});
+</script>
+</body></html>

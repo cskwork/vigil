@@ -53,6 +53,14 @@ type Orchestrator struct {
 var ErrAgentJobRequeued = errors.New("agent job requeued")
 
 func New(cfg *config.Config, st *store.Store, run *runner.Runner, ag agent.Adapter, ev *evidence.Store) *Orchestrator {
+	if run == nil {
+		return NewWithRunner(cfg, st, nil, ag, ev)
+	}
+	return NewWithRunner(cfg, st, run, ag, ev)
+}
+
+// NewWithRunner lets hosts observe independent validation through runner hooks.
+func NewWithRunner(cfg *config.Config, st *store.Store, run scenarioRunner, ag agent.Adapter, ev *evidence.Store) *Orchestrator {
 	o := &Orchestrator{cfg: cfg, st: st, agent: ag, logger: log.New(os.Stderr, "[orchestrator] ", log.LstdFlags), now: func() time.Time { return time.Now().UTC() }}
 	if run != nil {
 		o.run = run
