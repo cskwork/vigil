@@ -121,7 +121,7 @@ func TestPagesAreServed(t *testing.T) {
 		"/":         "할 일",
 		"/results":  "검증 결과",
 		"/help":     "도움말",
-		"/scripts":  "검사 스크립트",
+		"/scripts":  "검사 관리",
 		"/activity": "시스템 활동",
 	} {
 		w := get(t, s, path, nil)

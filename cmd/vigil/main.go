@@ -86,6 +86,7 @@ usage: vigil [-c vigil.yaml] [--json] <command> [flags]
   doctor [--install]      check sqlite, browsers, pi, keys, sandbox, target, evidence dir
 
   proof --registry <file.json> --local-operator   request-scoped ProofQA UI/API (default 127.0.0.1:8788)
+  admin [--addr 127.0.0.1:8787]   local multi-project admin with sites and on-demand runs
   serve [--addr 127.0.0.1:8787]   read-only live web view (what runs, what the AI agent does)
   loop --ui [addr]               loop + the same live view in-process
 
@@ -168,6 +169,8 @@ func (a *app) run(ctx context.Context, cmd string, args []string) (int, error) {
 		return a.cmdRun(ctx, args)
 	case "loop":
 		return 0, a.cmdLoop(ctx, args)
+	case "admin":
+		return 0, a.cmdAdmin(ctx, args)
 	case "serve":
 		return 0, a.cmdServe(ctx, args)
 	case "status":

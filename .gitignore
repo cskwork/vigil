@@ -42,3 +42,6 @@ vigil.local.yaml
 # domain packs are local (ship examples/ instead)
 /packs/
 /tasks/hitl-qa/loki-sample.json
+
+# Local visual design exploration and QA captures
+.impeccable/

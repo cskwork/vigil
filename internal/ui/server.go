@@ -34,6 +34,9 @@ import (
 	"vigil/internal/store"
 )
 
+//go:embed projects.html
+var projectsHTML []byte
+
 //go:embed todo.html
 var todoHTML []byte
 
@@ -65,6 +68,7 @@ type Server struct {
 	devDir           string // when set, page assets are read from this directory on every request
 	requestSubmitter RequestSubmitter
 	scriptActions    ScriptActions
+	onDemand         bool
 	submitMu         sync.Mutex
 	lastSubmitByHost map[string]time.Time
 	now              func() time.Time
@@ -82,6 +86,11 @@ type Server struct {
 // a QA request. The implementation owns validation, persistence and preemption.
 type RequestSubmitter interface {
 	SubmitUserRequest(ctx context.Context, situation string) (featureID string, jobID int64, err error)
+}
+
+// SiteRequestSubmitter accepts only a registered site identifier, never a URL override.
+type SiteRequestSubmitter interface {
+	SubmitUserRequestAt(context.Context, string, string) (string, int64, error)
 }
 
 // SetRequestSubmitter enables POST /api/requests. Standalone read-only servers
@@ -155,6 +164,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		home(w, r)
 	})
+	mux.HandleFunc("/projects", s.serveStatic(newStatic("projects.html", html, projectsHTML)))
 	mux.HandleFunc("/results", s.serveStatic(newStatic("results.html", html, resultsHTML)))
 	mux.HandleFunc("/help", s.serveStatic(newStatic("help.html", html, helpHTML)))
 	mux.HandleFunc("/activity", s.serveStatic(newStatic("activity.html", html, activityHTML)))
@@ -237,3 +247,6 @@ func (s *Server) safeJoin(rel string) (string, bool) {
 	}
 	return p, true
 }
+
+// SetOnDemandMode marks a console that runs explicit requests, without cadence workers.
+func (s *Server) SetOnDemandMode() { s.onDemand = true }

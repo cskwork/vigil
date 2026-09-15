@@ -15,23 +15,18 @@
 <body class="report">
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
-    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <div class="brand"><a class="brand-home" href="/" aria-label="Vigil 업무 개요"><svg viewBox="0 0 32 32" class="brand-mark" fill="none" aria-hidden="true"><path d="m6 7 10 19L26 7M11 7l5 10 5-10" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg><b>vigil<span>검증 관리</span></b></a></div>
+    <div class="workspace-label"><span class="workspace-dot" aria-hidden="true"></span><span id="brandTarget">대상 불러오는 중</span></div>
+    <p class="nav-section">업무 공간</p>
     <ul class="tree">
-      <li><a href="/">할 일 <span class="cnt" id="nTodo"></span></a></li>
-      <li>
-        <a href="/results" class="active">검증 결과 <span class="cnt" id="nBad"></span></a>
-        <!-- 리포트는 검증 결과에서 펼쳐 보는 한 장짜리 문서라 그 아래 가지로 둡니다. -->
-        <ul class="subtree" aria-label="검증 결과의 하위 화면">
-          <li><a href="#main" class="active" aria-current="page">리포트</a></li>
-        </ul>
-      </li>
-      <li><a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
-      <li><a href="/activity">시스템 활동</a></li>
-      <li><a href="/help">도움말</a></li>
+      <li><a href="/"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>업무 개요</span><span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-3"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="m8 13 3 3 5-6"/></svg><span>검증 결과</span><span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
+      <li class="nav-divider" aria-hidden="true"></li>
+      <li><a href="/activity"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/help"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
     </ul>
-    <!-- 개발자 정보를 켜면 검사 이름과 실행 번호, 증적 경로가 함께 인쇄됩니다.
-         개발자에게 리포트를 넘길 때 쓰고, 평소에는 꺼 둔 채로 출력합니다. -->
-    <details class="rail-foot" id="railPrefs" open>
+    <details class="rail-foot" id="railPrefs">
       <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
@@ -40,7 +35,7 @@
   </nav>
   <div class="content">
     <header class="topbar">
-      <div class="crumbs">QA 현황판 &rsaquo; 검증 결과 &rsaquo; <b>리포트</b></div>
+      <div class="crumbs">Vigil 관리 콘솔 &rsaquo; 검증 결과 &rsaquo; <b>리포트</b></div>
       <div class="fresh"><button class="btn" id="copyMd">Markdown 복사</button><button class="btn primary" onclick="window.print()">인쇄 / PDF</button></div>
     </header>
     <main id="main" tabindex="-1">

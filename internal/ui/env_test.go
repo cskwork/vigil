@@ -37,3 +37,33 @@ func TestVerificationCarriesRunEnvironment(t *testing.T) {
 		t.Fatalf("checks = %+v", out.Checks)
 	}
 }
+
+// On-demand admin checks have no deployment marker and may still be waiting
+// for approval. Neither condition may hide an actual result from its operator.
+func TestOnDemandResultsIncludePendingChecksAndSeparateSites(t *testing.T) {
+	s := newTestServer(t, config.ActiveHours{})
+	s.SetOnDemandMode()
+	seedScenario(t, s, "shared", model.StatePendingApproval, "spec", model.OutcomePass)
+	now := time.Now()
+	if _, e := s.st.InsertRun(context.Background(), &model.Run{ProjectID: "p", ScenarioID: "shared", ScenarioVersion: 1, Browser: model.BrowserChromium, Outcome: model.OutcomeAppFailure, StartedAt: now, FinishedAt: now, Environment: "other"}); e != nil {
+		t.Fatal(e)
+	}
+	w := get(t, s, "/api/verification", nil)
+	var out verificationPayload
+	if e := json.Unmarshal(w.Body.Bytes(), &out); e != nil {
+		t.Fatal(e)
+	}
+	if len(out.Checks) != 2 {
+		t.Fatalf("want one result per site including pending checks, got %+v", out.Checks)
+	}
+	sites := map[string]string{}
+	for _, c := range out.Checks {
+		sites[c.Environment] = c.Outcome
+		if c.NotVerified {
+			t.Fatal("actual run marked unverified")
+		}
+	}
+	if sites["stg"] != "PASS" || sites["other"] != "APP_FAILURE" {
+		t.Fatal(sites)
+	}
+}

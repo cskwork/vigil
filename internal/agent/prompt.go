@@ -40,8 +40,8 @@ func TaskPrompt(req Request) string {
 	default:
 		b.WriteString("Task: " + req.Task + "\n")
 	}
-	if req.Instructions != "" {
-		b.WriteString("\nThis is a MANUAL QA REQUEST. Perform the flow below on the deployed target exactly as a QA engineer would, capture evidence (screenshots after each meaningful step, network/console when relevant), then report. If the flow completes, propose deterministic scenarios that reproduce it (decision NEW_SCRIPT); if it cannot be completed, report NEEDS_REVIEW (or APP_FAILURE with evidence) and say precisely where it stopped.\n")
+	if req.Instructions != "" && req.Task != TaskRepair {
+		b.WriteString("\nThis is a MANUAL QA REQUEST. Perform the flow below on the deployed target exactly as a QA engineer would, capture evidence (screenshots after each meaningful step, network/console when relevant), then report. Interpret the supplied bug reproduction scenario, feature description, or pasted commit evidence. The user's explicitly stated expected behaviour is specification evidence: use oracle.source: spec and cite the request feature ID. Locators, button labels and observed URLs are implementation details; discovering them in the browser does NOT downgrade that stated expectation to an observation oracle. Assert only the requested expected behaviour, not unrelated page labels or extra sibling workflows. Follow the requested interactions exactly; do not substitute Enter for a requested button click, or switch to another flow to obtain a pass. If the requested action is blocked, retain the original flow and report the blocker. Implement executable multi-step E2E scripts with decision NEW_SCRIPT even when the expected-behaviour assertion fails: that failure is useful reproduction evidence. For a reported bug include a reproduction block with the symptom and what you actually observed. Preserve the user's expected behaviour; never weaken assertions to obtain a pass. If missing context, authentication, or environmental blockers prevent a meaningful script, return NEEDS_REVIEW and identify the missing information. Never modify the target service code. A commit hash alone is not evidence of its contents; use only supplied or actually retrieved evidence.\n")
 		if req.Mutation != "" && req.Mutation != "read-only" {
 			b.WriteString("The requester explicitly ALLOWS data changes of class '" + req.Mutation + "' on the listed accounts only (deploying content, submitting answers). Do not touch other accounts.\n")
 		}
@@ -51,6 +51,9 @@ func TaskPrompt(req Request) string {
 		b.WriteString("Economy: prefer \"get text\", \"wait --text\", \"find\" over \"snapshot -i\" (large). If a command times out, the page may be frozen: close that session, reopen the same URL in a NEW session name (e.g. student1b) and record in blocked_at whether the freeze reproduced. Take a screenshot after every meaningful step.\n")
 		b.WriteString("script_candidates MUST be complete vigil DSL YAML documents as strings (scenario/covers/steps/assert/oracle), never prose step lists.\n")
 		b.WriteString("\nInstructions:\n" + req.Instructions + "\n")
+	}
+	if req.Instructions != "" && req.Task == TaskRepair {
+		b.WriteString("\nOriginal user scenario (context only; obey the repair contract and preserve all assertions):\n" + req.Instructions + "\n")
 	}
 	if strings.TrimSpace(req.DomainRules) != "" {
 		b.WriteString("\n## Domain rules\nThese rules come from the project's domain file. Obey them while judging what you see; when a finding follows from one of them, set kind: domain_rule and cite the rule id in evidence.\n\n" + strings.TrimSpace(req.DomainRules) + "\n")
