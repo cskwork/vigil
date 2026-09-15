@@ -311,3 +311,29 @@ func TestSubmissionThrottleExpires(t *testing.T) {
 		t.Fatal("submission rejected after interval")
 	}
 }
+
+type siteRequestSubmitter struct {
+	fakeRequestSubmitter
+	site string
+}
+
+func (f *siteRequestSubmitter) SubmitUserRequestAt(ctx context.Context, situation, site string) (string, int64, error) {
+	f.site = site
+	return f.SubmitUserRequest(ctx, situation)
+}
+func TestRequestSiteSelectionKeepsLegacyContract(t *testing.T) {
+	f := &siteRequestSubmitter{fakeRequestSubmitter: fakeRequestSubmitter{featureID: "f", jobID: 8}}
+	if w := postRequest(newRequestServer(t, f), `{"situation":"Search and inspect results", "site":"staging"}`); w.Code != 201 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if f.site != "staging" || f.situation != "Search and inspect results" {
+		t.Fatal(f)
+	}
+	legacy := &fakeRequestSubmitter{featureID: "f", jobID: 8}
+	if w := postRequest(newRequestServer(t, legacy), `{"situation":"Search", "site":"staging"}`); w.Code != 400 {
+		t.Fatal(w.Code)
+	}
+	if legacy.situation != "" {
+		t.Fatal("site must never be silently ignored")
+	}
+}

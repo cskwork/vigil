@@ -55,6 +55,7 @@ type scriptRunView struct {
 	Actual       string `json:"actual,omitempty"`
 	Error        string `json:"error,omitempty"`
 	EvidenceRel  string `json:"evidence_rel,omitempty"`
+	Screenshot   string `json:"screenshot,omitempty"`
 	// Cause is the one-sentence cause of a failing run (nil when it passed).
 	Cause *causeView `json:"cause,omitempty"`
 }
@@ -105,7 +106,10 @@ type scriptsPayload struct {
 		Run     bool `json:"run"`
 		Approve bool `json:"approve"`
 	} `json:"actions"`
-	DailyAt string `json:"daily_at"`
+	DailyAt        string            `json:"daily_at"`
+	OnDemand       bool              `json:"on_demand"`
+	DefaultBrowser string            `json:"default_browser"`
+	EnvURLs        map[string]string `json:"env_urls"`
 }
 
 func (s *Server) scripts(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +153,13 @@ func (s *Server) scripts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := scriptsPayload{Project: p, Target: s.cfg.Target.BaseURL, Scripts: make([]scriptView, 0, len(scs)), Envs: s.cfg.EnvNames(), DefaultEnv: s.cfg.DefaultEnv().Name, DailyAt: s.cfg.Schedule.DailyAt}
+	out.OnDemand = s.onDemand
+	out.DefaultBrowser = s.cfg.Browser.Primary
+	out.EnvURLs = map[string]string{}
+	for _, name := range s.cfg.EnvNames() {
+		env, _ := s.cfg.Env(name)
+		out.EnvURLs[name] = env.BaseURL
+	}
 	out.Actions.Approve = s.scriptActions != nil
 	out.Actions.Run = s.scriptActions != nil && s.scriptActions.CanRun()
 	for _, sc := range scs {
@@ -181,9 +192,10 @@ func (s *Server) scripts(w http.ResponseWriter, r *http.Request) {
 		sv.Findings, sv.OpenFindings = findings[sc.ID], openFindings[sc.ID]
 		sv.RecentRuns = []scriptRunView{}
 		for _, ru := range recent[sc.ID] {
+			_, _, _, screenshot := s.evidenceSummary(ru.EvidenceDir, s.rel(ru.EvidenceDir))
 			sv.RecentRuns = append(sv.RecentRuns, scriptRunView{RunID: ru.ID, Outcome: string(ru.Outcome), Browser: string(ru.Browser),
 				Environment: ru.Environment, FinishedAt: fmtT(&ru.FinishedAt), DurationMs: ru.DurationMs, FailedStep: ru.FailedStep,
-				FailedAction: ru.FailedAction, Actual: clip(ru.Actual, 200), Error: clip(ru.Error, 200), EvidenceRel: s.rel(ru.EvidenceDir),
+				FailedAction: ru.FailedAction, Actual: clip(ru.Actual, 200), Error: clip(ru.Error, 200), EvidenceRel: s.rel(ru.EvidenceDir), Screenshot: screenshot,
 				Cause: runCause(ru, sc)})
 		}
 		if sv.Findings == nil {

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>검증 결과, QA 현황판</title>
+<title>검증 결과, Vigil 관리 콘솔</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
@@ -16,15 +16,18 @@
 <a class="skiplink" href="#main">본문으로 건너뛰기</a>
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
-    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <div class="brand"><a class="brand-home" href="/" aria-label="Vigil 업무 개요"><svg viewBox="0 0 32 32" class="brand-mark" fill="none" aria-hidden="true"><path d="m6 7 10 19L26 7M11 7l5 10 5-10" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg><b>vigil<span>검증 관리</span></b></a></div>
+    <div class="workspace-label"><span class="workspace-dot" aria-hidden="true"></span><span id="brandTarget">대상 불러오는 중</span></div>
+    <p class="nav-section">업무 공간</p>
     <ul class="tree">
-      <li><a href="/">할 일 <span class="cnt" id="nTodo"></span></a></li>
-      <li><a href="/results" class="active" aria-current="page">검증 결과 <span class="cnt" id="nBad"></span></a></li>
-      <li><a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
-      <li><a href="/activity">시스템 활동</a></li>
-      <li><a href="/help">도움말</a></li>
+      <li><a href="/"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>업무 개요</span><span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results" class="active" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-3"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="m8 13 3 3 5-6"/></svg><span>검증 결과</span><span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
+      <li class="nav-divider" aria-hidden="true"></li>
+      <li><a href="/activity"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/help"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
     </ul>
-    <details class="rail-foot" id="railPrefs" open>
+    <details class="rail-foot" id="railPrefs">
       <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
@@ -33,7 +36,7 @@
   </nav>
   <div class="content">
     <header class="topbar">
-      <div class="crumbs">QA 현황판 &rsaquo; 검증 결과</div>
+      <div class="crumbs">Vigil 관리 콘솔 &rsaquo; 검증 결과</div>
       <div class="search"><input type="search" id="q" placeholder="검사 항목 검색" aria-label="검사 항목 검색"></div>
       <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
     </header>
@@ -41,7 +44,7 @@
       <div id="fetchErr"></div>
       <div class="page-head">
         <h1>검증 결과</h1>
-        <p class="purpose">이번 배포에서 무엇이 확인됐고 무엇이 실패했는지 봅니다. <a href="/help#outcome">이 화면의 말이 궁금하면 도움말</a></p>
+        <p class="purpose">배포별 검증 결과와 확인 근거를 조회합니다. <a href="/help#outcome">이 화면의 말이 궁금하면 도움말</a></p>
       </div>
 
       <section aria-label="요약">
@@ -66,7 +69,7 @@
       </section>
 
       <section class="panel" id="requests" aria-label="사람이 넣은 확인 요청" hidden>
-        <header><h2>사람이 넣은 확인 요청</h2><p>할 일 화면에서 적어 넘긴 요청을 AI가 확인한 결과와 증거</p></header>
+        <header><h2>사람이 넣은 확인 요청</h2><p>업무 개요 화면에서 적어 넘긴 요청을 AI가 확인한 결과와 증거</p></header>
         <div class="body" id="requestsBody"></div>
       </section>
 
@@ -121,7 +124,7 @@ let shownChecks = null, filterNote = '';
 let compare = false, prevLoading = false, prevErr = null;
 const prevCache = {}; // 배포 표시 -> 그 배포의 검증 결과 (5초 폴링마다 다시 받지 않습니다)
 
-// 할 일 화면에서 조건을 가지고 넘어오면 KPI 대신 검사 목록이 먼저 보여야 합니다.
+// 업무 개요 화면에서 조건을 가지고 넘어오면 KPI 대신 검사 목록이 먼저 보여야 합니다.
 // 폴링 재렌더마다 반복되면 방해가 되므로 최초 1회만 실행합니다.
 let arriveFromTodo = !!(params.get('outcome') || params.get('group'));
 
@@ -130,9 +133,9 @@ $('deployDetails').open = store.on('vigil.deploys');
 $('deployDetails').addEventListener('toggle', () => store.setOn('vigil.deploys', $('deployDetails').open));
 
 // 주소에 남기는 것: 배포(marker), 결과 조건(outcome), 묶음(group), 검색어(q),
-// 정렬(sort). 기존 이름은 할 일 화면의 카드가 가리키므로 그대로 둡니다.
+// 정렬(sort). 기존 이름은 업무 개요 화면의 카드가 가리키므로 그대로 둡니다.
 function syncURL() {
-  const p = new URLSearchParams();
+  const p = new URLSearchParams(); if (selectedProject) p.set('project', selectedProject);
   if (marker) p.set('marker', marker);
   if (outcome) p.set('outcome', outcome);
   if (groupFilter && groupFilter !== 'all') p.set('group', groupFilter);
@@ -154,12 +157,13 @@ const poll = poller({
 
 function render() {
   const o = data; if (!o) return;
+  if(o.on_demand){document.querySelector('.purpose').textContent='사이트별 최신 검증 결과와 실행 증거를 확인합니다.';document.querySelector('#verify header h2').textContent='사이트별 최신 결과';document.querySelector('#verify header p').textContent='같은 검사도 실행한 사이트별로 구분합니다.';document.querySelector('#deploys')?.setAttribute('hidden','');}
   const checks = o.checks || [], deps = o.deployments || [], incs = o.incidents || [];
   const verified = checks.filter(c => !c.not_verified), pass = verified.filter(c => c.outcome === 'PASS' || c.outcome === 'QA_FLAKE');
   const failing = verified.filter(c => c.outcome === 'APP_FAILURE'), infra = verified.filter(c => ['ENV_FAILURE', 'AUTH_FAILURE', 'DATA_FAILURE'].includes(c.outcome));
   const dep = deps.find(d => d.marker === marker);
   const last = verified.map(c => c.finished_at).sort().reverse()[0];
-  let tone = 'idle', head = '검증 결과 없음', sub = '아직 이 배포에서 실행된 검사가 없습니다.';
+  let tone = 'idle', head = '검증 결과 없음', sub = o.on_demand ? '아직 실행된 검사가 없습니다.' : '아직 이 배포에서 실행된 검사가 없습니다.';
   if (incs.length || failing.length) { tone = 'bad'; head = '문제 있음'; sub = `${incs.length || failing.length}건이 약속과 다르게 동작했습니다.`; }
   else if (verified.length && infra.length) { tone = 'warn'; head = '검사 환경 문제'; sub = `${infra.length}건은 서비스가 아니라 검사 환경(네트워크, 로그인) 문제입니다.`; }
   else if (verified.length && pass.length === verified.length) { tone = 'ok'; head = '정상'; sub = `검증한 ${verified.length}개 항목 모두 약속대로 동작했습니다.`; }
@@ -173,12 +177,12 @@ function render() {
   };
   $('kpis').innerHTML = `
     <article class="kpi north ${tone}"><h3>${tip('서비스 상태', KT.north)}</h3><div class="value">${st({ ok: [head, 'ok'], bad: [head, 'bad'], warn: [head, 'warn'], idle: [head, 'muted'] }, tone)}</div><p class="delta">${esc(sub)}</p></article>
-    <article class="kpi"><h3>${tip('이 배포에서 검증', KT.verified)}</h3><div class="value">${pass.length}<small>/ ${verified.length} 정상</small></div><p class="delta">검사 항목 ${checks.length}개 중</p></article>
-    <article class="kpi"><h3>${tip('아직 검증 안 됨', KT.notrun)}</h3><div class="value">${checks.length - verified.length}</div><p class="delta">${checks.length - verified.length ? '정해진 주기에 자동 실행됩니다' : '모든 항목이 이 배포에서 실행됨'}</p></article>
+    <article class="kpi"><h3>${tip(o.on_demand ? '검증한 결과' : '이 배포에서 검증', KT.verified)}</h3><div class="value">${pass.length}<small>/ ${verified.length} 정상</small></div><p class="delta">검사 항목 ${checks.length}개 중</p></article>
+    <article class="kpi"><h3>${tip('아직 검증 안 됨', KT.notrun)}</h3><div class="value">${checks.length - verified.length}</div><p class="delta">${o.on_demand ? '실행하지 않은 검사는 정상으로 판단하지 않습니다.' : checks.length - verified.length ? '정해진 주기에 자동 실행됩니다' : '모든 항목이 이 배포에서 실행됨'}</p></article>
     <article class="kpi"><h3>${tip('마지막 검증', KT.last)}</h3><div class="value">${last ? when(last) : '<small>없음</small>'}</div><p class="delta">${last ? ago(last) : ''}</p></article>
     <article class="kpi"><h3>${tip('배포 확인 시각', KT.dep)}</h3><div class="value">${dep ? hm(dep.first_seen) : '<small>없음</small>'}</div><p class="delta">${dep ? esc(ymd(dep.first_seen)) + ' · 검사 ' + dep.runs + '회' : ''}</p></article>`;
 
-  const findingsNote = o.open_findings ? `<div class="sub" style="padding:0 0 6px">데이터 발견 사항 <span class="st st-warn"><i></i>미해결 ${o.open_findings}건</span> <span class="sub">(검사 스크립트 상세에서 확인, 터미널: <span class="mono">vigil findings</span>)</span></div>` : '';
+  const findingsNote = o.open_findings ? `<div class="sub" style="padding:0 0 6px">데이터 발견 사항 <span class="st st-warn"><i></i>미해결 ${o.open_findings}건</span> <span class="sub">(검사 관리 상세에서 확인, 터미널: <span class="mono">vigil findings</span>)</span></div>` : '';
   $('issuesBody').innerHTML = findingsNote + (incs.length ? `<div class="agent-head"><b>발견된 문제 ${incs.length}건</b></div><table><caption class="sr-only">미해결 문제 목록</caption><tbody>${incs.map(i => `<tr><td class="t">${i.md_rel ? `<a href="/evidence/${esc(i.md_rel)}" target="_blank" rel="noopener">${esc(incTitle(i.title))}</a>` : esc(incTitle(i.title))}${causeHTML(i, 'inc' + i.id)}</td><td class="fit">${st(INCIDENT, i.kind)}</td><td class="hide-sm fit">${esc(i.created_at)} <span class="sub">(${ago(i.created_at)})</span></td></tr>`).join('')}</tbody></table>`
     : `<div class="empty" style="padding:8px 0"><b>확인된 문제가 없습니다</b>문제가 확인되면 재현 절차와 증거가 여기에 정리됩니다.</div>`);
 
@@ -215,7 +219,7 @@ function render() {
       : prevErr ? `<span class="sub">이전 배포 결과를 불러오지 못했습니다. ${errHTML(prevErr)}</span>`
         : !prevIndex ? '<span class="sub">이전 배포 결과를 불러오는 중입니다.</span>'
           : `<span class="sub">비교 대상: ${esc(markerLabel(prevMarker))}</span>`;
-  $('deployHead').innerHTML = marker ? `<span>${esc(markerLabel(marker))}</span><span class="mk">${esc(marker)}</span>${dep ? `<span class="sub">처음 확인 ${esc(dep.first_seen)} · 마지막 검증 ${esc(dep.last_seen)}</span>` : ''}${cmpLine}<div class="actions"><label class="cmp"><input type="checkbox" id="cmpPrev"${compare ? ' checked' : ''}> 이전 배포와 비교</label><a class="btn" href="/report?marker=${encodeURIComponent(marker)}" target="_blank" rel="noopener">리포트 열기</a><button class="btn primary" id="copyMd">${filterNote ? `표시된 ${shownChecks.length}건 Markdown 복사` : 'Markdown 복사'}</button></div>`
+  $('deployHead').innerHTML = o.on_demand ? '<span class="sub">각 사이트에서 마지막으로 실행한 결과입니다.</span><a class="btn" href="/report" target="_blank" rel="noopener">리포트 열기</a>' : marker ? `<span>${esc(markerLabel(marker))}</span><span class="mk">${esc(marker)}</span>${dep ? `<span class="sub">처음 확인 ${esc(dep.first_seen)} · 마지막 검증 ${esc(dep.last_seen)}</span>` : ''}${cmpLine}<div class="actions"><label class="cmp"><input type="checkbox" id="cmpPrev"${compare ? ' checked' : ''}> 이전 배포와 비교</label><a class="btn" href="/report?marker=${encodeURIComponent(marker)}" target="_blank" rel="noopener">리포트 열기</a><button class="btn primary" id="copyMd">${filterNote ? `표시된 ${shownChecks.length}건 Markdown 복사` : 'Markdown 복사'}</button></div>`
     : '<span class="sub">아직 배포 표시(마커)가 기록된 검사가 없습니다.</span>';
   const cm = $('copyMd'); if (cm) cm.onclick = copyMarkdown;
   const cp = $('cmpPrev'); if (cp) cp.onchange = () => { compare = cp.checked; prevErr = null; rerender(render); };
@@ -225,7 +229,7 @@ function render() {
   const firstProblem = GROUPS.find(g => ['bad', 'review', 'env'].includes(g.key) && pool.some(c => groupOf(c) === g.key));
   if (openGroups === null) {
     openGroups = new Set();
-    for (const g of GROUPS) if (groupOpen('results', g.key, firstProblem ? g.key === firstProblem.key : false)) openGroups.add(g.key);
+    for (const g of GROUPS) if (groupOpen('results', g.key, firstProblem ? g.key === firstProblem.key : g.key === 'pass')) openGroups.add(g.key);
   }
   $('groups').removeAttribute('aria-busy');
   $('groups').innerHTML = visible.map(g => {
@@ -240,7 +244,7 @@ function render() {
         <span class="sub">${esc(g.hint)}</span></button></h3>
       ${open ? `<table class="checks stack-table">
         <caption class="sr-only">${esc(g.label)} 검사 목록</caption>
-        <thead><tr><th scope="col">검사 항목</th><th scope="col" class="fit">결과</th>${prevIndex ? '<th scope="col" class="fit">이전 배포와 비교</th>' : ''}<th scope="col" class="hide-sm">증거</th><th scope="col" class="hide-sm fit">검증 시각</th><th scope="col" class="fit">증거 상세</th></tr></thead>
+        <thead><tr><th scope="col">검사 항목</th><th scope="col" class="fit">결과</th>${prevIndex ? '<th scope="col" class="fit">이전 배포와 비교</th>' : ''}<th scope="col" class="hide-sm fit">검증 시각</th><th scope="col" class="fit">검증 화면</th></tr></thead>
         <tbody>${page.map(c => rowHTML(c)).join('')}</tbody></table>
         ${rows.length > page.length ? `<div class="more"><button class="btn" data-more="${g.key}">더 보기 (+${rows.length - page.length})</button></div>` : ''}`
       : (rows.length ? '' : `<div class="empty ghost">${esc(g.label)}에 해당하는 검사가 없습니다.</div>`)}
@@ -263,7 +267,7 @@ function render() {
     rerender(render);
   });
   bindTabs();
-  const openCheck = checks.find(c => c.scenario_id === openRow); if (openCheck && $('detail')) loadDetail(openCheck.evidence_rel);
+  const openCheck = checks.find(c => (c.key || c.scenario_id) === openRow); if (openCheck && $('detail')) loadDetail(openCheck.evidence_rel);
 
   $('legend').innerHTML = `${st(OUTCOME, 'PASS')} 약속대로 동작 &nbsp; ${st(OUTCOME, 'APP_FAILURE')} 약속과 다르게 동작, 개발팀 확인 &nbsp; ${st(OUTCOME, 'SCRIPT_DRIFT')} 화면 구조가 바뀌어 검사 수정 &nbsp; ${st(OUTCOME, 'ENV_FAILURE')} 검사 환경 문제 &nbsp; <a href="/help">용어 설명</a>`;
 
@@ -348,15 +352,15 @@ async function loadPrev(m) {
 function rowHTML(c) {
   const ev = c.not_verified ? '' : `<span class="evi"><span class="${c.screenshot ? 'has' : ''}">화면 캡처${c.screenshot && c.browser === 'lightpanda' ? ' (텍스트)' : ''}</span><span class="${c.steps ? 'has' : ''}">단계 ${c.steps}</span><span class="${c.requests ? 'has' : ''}">서버 응답 ${c.requests}</span>${c.console_errors ? `<span class="has">콘솔 오류 ${c.console_errors}</span>` : ''}</span>`;
   const evi = ev ? `<p class="sub cause-evi">${ev}</p>` : '';
-  const why = !c.not_verified ? causeHTML(c, c.scenario_id, evi) : '';
-  const open = openRow === c.scenario_id;
-  const cols = prevIndex ? 6 : 5;
+  const why = !c.not_verified ? causeHTML(c, c.key || c.scenario_id, evi) : '';
+  const open = openRow === (c.key || c.scenario_id);
+  const cols = prevIndex ? 5 : 4;
   const row = `<tr class="${open ? 'sel' : ''}"><td class="title"><div class="t">${esc(c.title || c.scenario_id)}</div><div class="sub">${esc(CLASS[c.class] || c.class)}${c.browser ? ` · ${esc(BROWSER[c.browser] || c.browser)}` : ''} ${envBadge(c.environment)} ${dev(c.scenario_id + (c.version ? ' v' + c.version : '') + (c.run_id ? ' run#' + c.run_id : ''))}</div>${why}</td>
     <td class="st-cell">${c.not_verified ? '<span class="sub">-</span>' : stTip(OUTCOME, c.outcome)}</td>
     ${prevIndex ? `<td class="st-cell" data-lab="이전 배포와 비교">${diffCell(c)}</td>` : ''}
-    <td class="hide-sm" data-lab="증거">${ev}</td>
+
     <td class="hide-sm when" data-lab="검증 시각">${c.finished_at ? when(c.finished_at) + `<div class="sub">${ago(c.finished_at)}</div>` : ''}</td>
-    <td class="fit">${c.not_verified ? '' : `<button class="btn" data-detail="${esc(c.scenario_id)}" aria-expanded="${open}">${open ? '접기' : '증거 보기'}</button>`}</td></tr>`;
+    <td class="fit">${c.screenshot ? `<button class="btn" data-screenshot="${esc(c.screenshot)}" data-title="${esc(c.title||c.scenario_id)}">화면 보기</button>` : ''} ${c.not_verified ? '' : `<button class="linklike sub" data-detail="${esc(c.key || c.scenario_id)}" aria-expanded="${open}">${open ? '기록 접기' : '상세 기록'}</button>`}</td></tr>`;
   // 증거 탭: 탭 하나만 Tab 순서에 들어가고, 좌우 화살표로 옮깁니다. 내용 영역은
   // tabpanel 로 선언해 어느 탭의 내용인지 스크린리더가 말할 수 있게 합니다.
   const det = open ? `<tr class="detail-row"><td colspan="${cols}"><div class="tabs" role="tablist" aria-label="증거 종류">${TABS.map(([k, l]) => `<button role="tab" id="tab-${k}" aria-controls="detail" aria-selected="${tab === k}" tabindex="${tab === k ? 0 : -1}" data-tab="${k}">${l}</button>`).join('')}</div><div id="detail" role="tabpanel" aria-labelledby="tab-${tab}"><div class="skel"></div></div><p class="sub dev">${c.environment ? `환경: ${esc(c.environment)} · ` : ''}증적: <a href="/evidence/${esc(c.evidence_rel)}/" target="_blank" rel="noopener">${esc(c.evidence_rel)}</a></p></td></tr>` : '';

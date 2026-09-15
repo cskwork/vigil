@@ -21,6 +21,7 @@ type deploymentView struct {
 
 type checkView struct {
 	ScenarioID   string `json:"scenario_id"`
+	Key          string `json:"key"`
 	Title        string `json:"title"`
 	Class        string `json:"class"`
 	State        string `json:"state"`
@@ -56,7 +57,8 @@ type verificationPayload struct {
 	Checks      []checkView      `json:"checks"`
 	Incidents   []incidentView   `json:"incidents"`
 	// OpenFindings counts the data-analyst findings still OPEN for the project.
-	OpenFindings int `json:"open_findings"`
+	OpenFindings int  `json:"open_findings"`
+	OnDemand     bool `json:"on_demand"`
 }
 
 // verification answers "what was verified on this build, with what evidence":
@@ -74,6 +76,7 @@ func (s *Server) verification(w http.ResponseWriter, r *http.Request) {
 		marker = deps[0].Marker
 	}
 	out.Marker = marker
+	out.OnDemand = s.onDemand
 	byScenario := map[string]*model.Run{}
 	if marker != "" {
 		if runs, err := s.st.LatestRunsForDeployment(ctx, p, marker); err == nil {
@@ -83,15 +86,42 @@ func (s *Server) verification(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	byID := map[string]*model.Scenario{}
-	if scs, err := s.st.ListScenarios(ctx, p, model.StateActive, model.StateSoak, model.StateQuarantined, model.StateNeedsReview); err == nil {
-		for _, sc := range scs {
-			byID[sc.ID] = sc
-			cv := checkView{ScenarioID: sc.ID, Title: sc.Title, Class: sc.Class, State: string(sc.State), Oracle: sc.OracleSource}
-			ru := byScenario[sc.ID]
+	bySite := map[string][]*model.Run{}
+	states := []model.ScenarioState{model.StateActive, model.StateSoak, model.StateQuarantined, model.StateNeedsReview}
+	if s.onDemand {
+		runs, err := s.st.LatestRunsByEnvironment(ctx, p)
+		if err != nil {
+			writeAPIError(w, 500, "검증 결과를 불러오지 못했습니다")
+			return
+		}
+		for _, run := range runs {
+			bySite[run.ScenarioID] = append(bySite[run.ScenarioID], run)
+		}
+		states = nil
+	}
+	scs, err := s.st.ListScenarios(ctx, p, states...)
+	if err != nil {
+		writeAPIError(w, 500, "검사 목록을 불러오지 못했습니다")
+		return
+	}
+	for _, sc := range scs {
+		byID[sc.ID] = sc
+		runs := []*model.Run{byScenario[sc.ID]}
+		if s.onDemand {
+			runs = bySite[sc.ID]
+			if len(runs) == 0 {
+				runs = []*model.Run{nil}
+			}
+		}
+		for _, ru := range runs {
+			cv := checkView{ScenarioID: sc.ID, Key: sc.ID, Title: sc.Title, Class: sc.Class, State: string(sc.State), Oracle: sc.OracleSource}
 			if ru == nil {
 				cv.NotVerified = true
 				out.Checks = append(out.Checks, cv)
 				continue
+			}
+			if s.onDemand {
+				cv.Key = sc.ID + "@" + ru.Environment
 			}
 			cv.RunID, cv.Version, cv.Browser, cv.Outcome = ru.ID, ru.ScenarioVersion, string(ru.Browser), string(ru.Outcome)
 			cv.Environment = ru.Environment
@@ -103,6 +133,7 @@ func (s *Server) verification(w http.ResponseWriter, r *http.Request) {
 			out.Checks = append(out.Checks, cv)
 		}
 	}
+
 	sort.Slice(out.Checks, func(i, j int) bool {
 		if out.Checks[i].Class != out.Checks[j].Class {
 			return out.Checks[i].Class < out.Checks[j].Class

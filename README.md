@@ -16,6 +16,30 @@ scenario for it. You approve that scenario, and vigil runs it every day.
 
 ---
 
+## Business admin console
+
+`vigil admin` opens a Korean console for project and QA teams. Add projects and
+multiple sites and edit URLs in the UI. Describe a bug reproduction scenario, a
+feature, or pasted commit evidence: the orchestrator delegates browser investigation
+and E2E script creation, then independently runs the generated scripts. It never
+modifies the target service code. IDs and URL host permissions are filled automatically.
+Advanced scripts remain available through YAML import.
+
+```sh
+go build -o vigil ./cmd/vigil
+./vigil -c vigil.yaml admin --addr 127.0.0.1:8787
+```
+
+Running a check opens its progress panel and a visible Chromium window. The
+finished screenshot appears in place and opens in an enlargement dialog; step,
+network and console details remain available separately. Each project has its
+own scripts and history, and results distinguish each site's latest run.
+
+This local-only command runs explicit checks. It does not start recurring
+schedules or Jira notifications. Requested generation uses the configured Pi agent
+and browser extension; unavailable providers produce an explicit incomplete result. Existing `loop --ui` and
+`proof` workflows remain available. See [admin setup and scope](docs/admin-console.md).
+
 ## One-time checks with ProofQA
 
 `vigil proof` adds a Korean web flow: describe one change, review its criteria,

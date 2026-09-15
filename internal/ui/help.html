@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>도움말, QA 현황판</title>
+<title>도움말, Vigil 관리 콘솔</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
@@ -16,26 +16,18 @@
 <a class="skiplink" href="#main">본문으로 건너뛰기</a>
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
-    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <div class="brand"><a class="brand-home" href="/" aria-label="Vigil 업무 개요"><svg viewBox="0 0 32 32" class="brand-mark" fill="none" aria-hidden="true"><path d="m6 7 10 19L26 7M11 7l5 10 5-10" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg><b>vigil<span>검증 관리</span></b></a></div>
+    <div class="workspace-label"><span class="workspace-dot" aria-hidden="true"></span><span id="brandTarget">대상 불러오는 중</span></div>
+    <p class="nav-section">업무 공간</p>
     <ul class="tree">
-      <li><a href="/">할 일 <span class="cnt" id="nTodo"></span></a></li>
-      <li><a href="/results">검증 결과 <span class="cnt" id="nBad"></span></a></li>
-      <li><a href="/scripts">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
-      <li><a href="/activity">시스템 활동</a></li>
-      <li>
-        <a href="/help" class="active" aria-current="page">도움말</a>
-        <ul class="subtree" aria-label="도움말 화면의 구역">
-          <li><a href="#state">검사 스크립트의 상태</a></li>
-          <li><a href="#oracle">판정 근거</a></li>
-          <li><a href="#outcome">검사 결과</a></li>
-          <li><a href="#repro">재현 판정</a></li>
-          <li><a href="#misc">그 밖의 말</a></li>
-          <li><a href="#tasks">자주 하는 작업</a></li>
-          <li><a href="#keys">단축키</a></li>
-        </ul>
-      </li>
+      <li><a href="/"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>업무 개요</span><span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-3"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="m8 13 3 3 5-6"/></svg><span>검증 결과</span><span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
+      <li class="nav-divider" aria-hidden="true"></li>
+      <li><a href="/activity"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/help" class="active" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
     </ul>
-    <details class="rail-foot" id="railPrefs" open>
+    <details class="rail-foot" id="railPrefs">
       <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
@@ -44,7 +36,7 @@
   </nav>
   <div class="content">
     <header class="topbar">
-      <div class="crumbs">QA 현황판 &rsaquo; 도움말</div>
+      <div class="crumbs">Vigil 관리 콘솔 &rsaquo; 도움말</div>
     </header>
     <main id="main" tabindex="-1">
       <div class="page-head">
@@ -59,7 +51,7 @@
             <li><b>1. 신호 감지</b><span>새 커밋, Jira 이슈, 운영 로그에서 확인할 거리를 찾습니다.</span></li>
             <li><b>2. AI가 재현하고 검사 작성</b><span>AI가 브라우저로 직접 눌러 증상을 재현하고 검사 절차를 만듭니다.</span></li>
             <li><b>3. 사람이 확인하고 승인</b><span>사람이 증거를 보고 승인해야 정식 검사가 됩니다. 승인 전에는 아무것도 자동으로 돌지 않습니다.</span></li>
-            <li><b>4. 매일 자동 실행</b><span>승인된 검사는 매일 정해진 시각과 배포 직후에 실행되고, 실패하면 할 일 화면에 올라옵니다.</span></li>
+            <li><b>4. 매일 자동 실행</b><span>승인된 검사는 매일 정해진 시각과 배포 직후에 실행되고, 실패하면 업무 개요 화면에 올라옵니다.</span></li>
           </ol>
         </div>
       </section>
@@ -67,8 +59,8 @@
       <section class="panel">
         <header><h2>용어표</h2><p>왼쪽이 화면에 보이는 말, 오른쪽이 내가 할 일입니다.</p></header>
         <div class="body stack-panel">
-          <h3 class="ghead" id="state">검사 스크립트의 상태</h3>
-          <table class="gloss"><caption class="sr-only">검사 스크립트 상태 용어</caption>
+          <h3 class="ghead" id="state">검사 관리의 상태</h3>
+          <table class="gloss"><caption class="sr-only">검사 관리 상태 용어</caption>
             <thead><tr><th scope="col">표시 이름</th><th scope="col">내부 용어</th><th scope="col">무슨 뜻</th><th scope="col">내가 할 일</th></tr></thead>
             <tbody id="tState"></tbody></table>
 
@@ -137,9 +129,9 @@ const row = (label, tone, code, mean, todo) =>
 const fromMap = (map, code, todo) => row((map[code] || [code])[0], (map[code] || [code, 'muted'])[1], code, glossOf(map, code), todo);
 
 $('tState').innerHTML = [
-  ['ACTIVE', '없습니다. 실패하면 할 일 화면에 올라옵니다.'],
+  ['ACTIVE', '없습니다. 실패하면 업무 개요 화면에 올라옵니다.'],
   ['SOAK', '없습니다. 통과 횟수가 차기를 기다립니다.'],
-  ['PENDING_APPROVAL', '검사 스크립트 화면에서 증거를 보고 승인하거나 반려합니다.'],
+  ['PENDING_APPROVAL', '검사 관리 화면에서 증거를 보고 승인하거나 반려합니다.'],
   ['CANDIDATE', '없습니다. 자동 검증 결과를 기다립니다.'],
   ['NEEDS_REVIEW', '증거를 보고 승인하거나 반려합니다.'],
   ['QUARANTINED', '검사 절차를 고치고 다시 승인합니다.'],
@@ -188,12 +180,12 @@ $('tMisc').innerHTML = [
 ].map(([label, code, mean, todo]) => `<tr><td>${esc(label)}</td><td class="mono" data-lab="내부 용어">${esc(code)}</td><td data-lab="무슨 뜻">${esc(mean)}</td><td data-lab="내가 할 일">${esc(todo)}</td></tr>`).join('');
 
 $('tTask').innerHTML = [
-  ['검사 승인하기', '<a href="/scripts?state=PENDING_APPROVAL">검사 스크립트</a> 화면에서 <b>✔ 승인</b>', 'vigil approve &lt;검사 이름&gt;'],
-  ['운영 환경에서 실행하기', '검사 스크립트 화면에서 <b>▶ 실행</b>, 환경에서 운영 선택', 'vigil run &lt;검사 이름&gt; --env prod'],
+  ['검사 승인하기', '<a href="/scripts?state=PENDING_APPROVAL">검사 관리</a> 화면에서 <b>✔ 승인</b>', 'vigil approve &lt;검사 이름&gt;'],
+  ['운영 환경에서 실행하기', '검사 관리 화면에서 <b>▶ 실행</b>, 환경에서 운영 선택', 'vigil run &lt;검사 이름&gt; --env prod'],
   ['Playwright로 내보내기', '없습니다. 터미널에서만 합니다.', 'vigil export &lt;검사 이름&gt;'],
   ['티켓 증상 재현하기', '없습니다. 터미널에서만 합니다.', 'vigil reproduce &lt;이슈 키&gt;'],
   ['발견 사항 닫기', '없습니다. 터미널에서만 합니다.', 'vigil findings resolve &lt;번호&gt;'],
-  ['검사 반려하기', '검사 스크립트 화면에서 <b>✖ 반려</b>', 'vigil reject &lt;검사 이름&gt;'],
+  ['검사 반려하기', '검사 관리 화면에서 <b>✖ 반려</b>', 'vigil reject &lt;검사 이름&gt;'],
 ].map(([what, ui, cli]) => `<tr><td class="t">${esc(what)}</td><td data-lab="화면에서">${ui}</td><td data-lab="터미널에서"><span class="mono">${cli}</span></td></tr>`).join('');
 
 // 단축키 표도 app.js 의 SHORTCUTS 를 그대로 읽어, 실제로 동작하는 키와 어긋날 수

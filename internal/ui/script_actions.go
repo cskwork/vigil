@@ -152,6 +152,9 @@ func (s *Server) scriptApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]any{"id": rc.ID, "state": string(rc.To), "cadence": rc.Cadence, "next_due_at": fmtT(rc.NextDueAt), "message": rc.Message(s.cfg.DailyLocation())}
+	if s.onDemand {
+		out["message"] = "승인했습니다. 실행할 사이트를 선택해 수동으로 검증할 수 있습니다."
+	}
 	if rc.Jira != nil {
 		out["jira"] = rc.Jira
 	}
