@@ -1,3 +1,52 @@
+// Explicit project context travels in URLs, so two tabs can operate on different
+// projects without a global cookie or a localStorage selection racing them.
+let projectDisplayName = '';
+const selectedProject = new URLSearchParams(location.search).get('project') || '';
+function projectURL(raw) {
+ const u = new URL(raw, location.href);
+ if (selectedProject && u.origin === location.origin && !u.searchParams.has('project')) u.searchParams.set('project', selectedProject);
+ return u.pathname + u.search + u.hash;
+}
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init) => {
+ if (typeof input === 'string' && input.startsWith('/') && !input.startsWith('//')) input = projectURL(input);
+ return nativeFetch(input, init);
+};
+// Dynamic tables create evidence and navigation links after each poll.
+function scopeLinks(root) {
+ for (const a of root.querySelectorAll('a[href],img[src]')) {
+  const attr = a.tagName === 'IMG' ? 'src' : 'href', value = a.getAttribute(attr);
+  if (value?.startsWith('/') && !value.startsWith('//')) a.setAttribute(attr, projectURL(value));
+ }
+}
+if (selectedProject) {
+ scopeLinks(document);
+ new MutationObserver(() => scopeLinks(document)).observe(document.body, {childList:true,subtree:true});
+}
+const projectRegistry = nativeFetch('/api/projects').then(async r => {
+ if (!r.ok) return null;
+ const registry = await r.json(), current = selectedProject || registry.default_project;
+ const currentRecord=registry.projects.find(p=>p.id===current);
+ projectDisplayName=currentRecord?.name||'';
+ if(document.getElementById('projectName')&&projectDisplayName)document.getElementById('projectName').textContent=projectDisplayName;
+ const site=currentRecord?.sites.find(s=>s.id===currentRecord.default_site);
+ if(site) setTarget(site.url);
+ if(location.pathname==='/projects' && document.getElementById('freshText')) document.getElementById('freshText').textContent='설정 불러옴';
+ const rail = document.querySelector('.rail');
+ if (rail) {
+  const box = document.createElement('div');box.className='project-picker';
+  const label=document.createElement('label');label.htmlFor='projectSelect';label.textContent='프로젝트';
+  const select=document.createElement('select');select.id='projectSelect';select.setAttribute('aria-label','프로젝트 선택');
+  for(const p of registry.projects){const option=document.createElement('option');option.value=p.id;option.textContent=p.name;select.append(option)}
+  select.value=current;select.onchange=()=>{location.href='/?project='+encodeURIComponent(select.value)};
+  box.append(label,select);rail.querySelector('.brand').after(box);
+  const li=document.createElement('li');li.innerHTML='<a href="/projects" id="projectManage"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 7h7l2 2h9v11H3zM3 7V4h7l2 3"/></svg><span>프로젝트·사이트</span></a>';
+  rail.querySelector('.tree').append(li);if(location.pathname==='/projects'){rail.querySelectorAll('a.active').forEach(a=>{a.classList.remove('active');a.removeAttribute('aria-current')});li.firstChild.classList.add('active');li.firstChild.setAttribute('aria-current','page')}
+  scopeLinks(rail);
+ }
+ return registry;
+}).catch(()=>null);
+
 // app.js: what every dashboard page shares. Loaded before each page's own
 // script. Keeps the vocabulary (Korean labels for machine states) in one
 // place so the three pages never disagree about what "APP_FAILURE" means.
@@ -53,7 +102,7 @@ function foldOnNarrow(el) {
   sync();
   narrowQuery.addEventListener('change', sync);
 }
-foldOnNarrow($('railPrefs'));
+// Preferences stay collapsed until the operator opens them.
 
 // ---- vocabulary (plain Korean, one register) --------------------------------
 const OUTCOME = {
@@ -298,7 +347,7 @@ document.addEventListener('keydown', (e) => {
   if (gAt && now - gAt < 1500) {
     gAt = 0;
     const go = GOTO[(e.key || '').toLowerCase()];
-    if (go) { e.preventDefault(); location.href = go[0]; return; }
+    if (go) { e.preventDefault(); location.href = projectURL(go[0]); return; }
   }
   if (e.key === 'g') { gAt = now; return; }
   gAt = 0;
@@ -504,9 +553,9 @@ function bindCause(root) {
 // Every internal word the pages show gets one sentence of "what this means for
 // you". /help prints the same sentences in a table, so the two never drift.
 const GLOSS = {
-  ACTIVE: '사람이 승인한 검사입니다. 매일 정해진 시각과 배포 직후에 자동으로 실행됩니다.',
+  ACTIVE: '검토를 마친 정식 검사입니다. 설정된 실행 방식에 따라 사용합니다.',
   SOAK: '아직 믿을 수 있는지 지켜보는 중입니다. 연속으로 통과하면 정식 검사가 됩니다.',
-  PENDING_APPROVAL: 'AI가 만들고 실행까지 마쳤습니다. 사람이 승인해야 매일 실행됩니다.',
+  PENDING_APPROVAL: '검사 절차를 검토한 뒤 승인하거나 반려할 수 있습니다.',
   CANDIDATE: 'AI가 방금 제안한 검사입니다. 자동 검증을 기다립니다.',
   NEEDS_REVIEW: 'AI가 스스로 고치지 못했습니다. 사람이 보고 승인하거나 반려해야 합니다.',
   QUARANTINED: '결과가 들쭉날쭉해서 자동 실행에서 잠시 빠졌습니다.',
@@ -563,7 +612,8 @@ const stTip = (map, v) => {
 };
 
 // ---- "what happens next" for a script state --------------------------------
-function nextStep(s, dailyAt) {
+function nextStep(s, dailyAt, onDemand = false) {
+ if(onDemand) return s.state === "PENDING_APPROVAL" ? "검사 절차를 검토해 승인하거나 반려하세요." : "실행 버튼에서 사이트를 선택해 검증할 수 있습니다.";
   const at = dailyAt || '09:00';
   switch (s.state) {
     case 'PENDING_APPROVAL': return `승인하면 매일 ${at}에 자동 실행됩니다.`;
@@ -622,3 +672,11 @@ function groupOpen(page, key, fallback) {
   return v === null ? fallback : v === '1';
 }
 function setGroupOpen(page, key, open) { store.setOn(`vigil.group.${page}.${key}`, open); }
+
+// Screenshots are the default evidence for non-technical operators.
+let screenshotDialog = null;
+function showScreenshot(src, title) {
+ if(!screenshotDialog){screenshotDialog=document.createElement('dialog');screenshotDialog.className='screenshot-dialog';screenshotDialog.innerHTML='<header><h2 id="screenshotTitle"></h2><button type="button" class="btn" aria-label="화면 캡처 닫기">닫기</button></header><p class="screenshot-error" role="status" hidden>화면 캡처를 불러오지 못했습니다. 저장된 이미지가 없거나 정리되었을 수 있습니다.</p><img alt="검증 당시의 화면 캡처">';screenshotDialog.setAttribute('aria-labelledby','screenshotTitle');document.body.append(screenshotDialog);screenshotDialog.querySelector('button').onclick=()=>screenshotDialog.close();screenshotDialog.addEventListener('click',e=>{if(e.target===screenshotDialog){const r=screenshotDialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)screenshotDialog.close()}});}
+ const img=screenshotDialog.querySelector('img'),error=screenshotDialog.querySelector('.screenshot-error');screenshotDialog.querySelector('h2').textContent=title||'검증 화면';error.hidden=true;img.hidden=false;img.onerror=()=>{img.hidden=true;error.hidden=false};img.src=projectURL('/evidence/'+src);if(!screenshotDialog.open)screenshotDialog.showModal();
+}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-screenshot]');if(b){e.preventDefault();showScreenshot(b.dataset.screenshot,b.dataset.title)}});

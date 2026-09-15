@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>검사 스크립트, QA 현황판</title>
+<title>검사 관리, Vigil 관리 콘솔</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
@@ -16,15 +16,18 @@
 <a class="skiplink" href="#main">본문으로 건너뛰기</a>
 <div class="shell">
   <nav class="rail" aria-label="주 메뉴">
-    <div class="brand"><b>QA 현황판</b><span id="brandTarget">vigil</span></div>
+    <div class="brand"><a class="brand-home" href="/" aria-label="Vigil 업무 개요"><svg viewBox="0 0 32 32" class="brand-mark" fill="none" aria-hidden="true"><path d="m6 7 10 19L26 7M11 7l5 10 5-10" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg><b>vigil<span>검증 관리</span></b></a></div>
+    <div class="workspace-label"><span class="workspace-dot" aria-hidden="true"></span><span id="brandTarget">대상 불러오는 중</span></div>
+    <p class="nav-section">업무 공간</p>
     <ul class="tree">
-      <li><a href="/">할 일 <span class="cnt" id="nTodo"></span></a></li>
-      <li><a href="/results">검증 결과 <span class="cnt" id="nBad"></span></a></li>
-      <li><a href="/scripts" class="active" aria-current="page">검사 스크립트 <span class="cnt" id="nScripts"></span></a></li>
-      <li><a href="/activity">시스템 활동</a></li>
-      <li><a href="/help">도움말</a></li>
+      <li><a href="/"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>업무 개요</span><span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-3"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="m8 13 3 3 5-6"/></svg><span>검증 결과</span><span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts" class="active" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
+      <li class="nav-divider" aria-hidden="true"></li>
+      <li><a href="/activity"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/help"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
     </ul>
-    <details class="rail-foot" id="railPrefs" open>
+    <details class="rail-foot" id="railPrefs">
       <summary>화면 설정</summary>
       <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
       <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
@@ -33,16 +36,19 @@
   </nav>
   <div class="content">
     <header class="topbar">
-      <div class="crumbs">QA 현황판 &rsaquo; 검사 스크립트</div>
+      <div class="crumbs">Vigil 관리 콘솔 &rsaquo; 검사 관리</div>
       <div class="search"><input type="search" id="q" placeholder="스크립트 검색 (제목, 이름, 연결)" aria-label="스크립트 검색"></div>
       <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
     </header>
     <main id="main" tabindex="-1">
       <div id="fetchErr"></div>
       <div class="page-head">
-        <h1>검사 스크립트</h1>
-        <p class="purpose">자동 검사 절차를 보고, 실행하고, 승인합니다. <a href="/help#state">이 화면의 말이 궁금하면 도움말</a></p>
+        <h1>검사 관리</h1>
+        <p class="purpose">검사 절차를 검토하고 승인하거나 다시 실행합니다. <a href="/help#state">이 화면의 말이 궁금하면 도움말</a></p>
       </div>
+      <section class="panel execution-panel" id="executionPanel" aria-label="검사 실행 상황" tabindex="-1" hidden><header><div><h2 id="executionTitle">검사 실행</h2><p id="executionSite"></p></div><span id="executionBadge" role="status"></span></header><div class="body"><p id="executionMessage" role="status"></p><div id="executionImage"></div><details id="executionDetails" class="advanced" open><summary>실행 과정 보기</summary><ol id="executionSteps" class="execution-steps"></ol></details><div id="executionLinks"></div></div></section>
+      <details class="panel qa-intake" id="simpleCheck" hidden><summary><header><h2>검사 만들기</h2><p>재현할 버그나 확인할 사용자 시나리오를 적어 주세요.</p></header></summary><form id="basicForm" class="admin-form"><label>검증 사이트<select id="basicSite" required></select></label><label>어떤 상황을 확인할까요?<textarea id="qaScenario" required maxlength="8000" rows="7" placeholder="예: 네이버에서 검색어를 입력하고 검색하면 결과 화면이 나와야 하는데, 빈 화면이 표시됩니다. 이 순서대로 재현해 주세요.&#10;&#10;구현한 기능 설명이나 커밋 메시지·변경 내용을 붙여 넣어도 됩니다. 기대 동작이 있으면 함께 적어 주세요."></textarea></label><p class="form-note">에이전트가 사이트를 살펴보고 E2E 검사 스크립트를 작성한 뒤 실제로 실행합니다. 결과에서 재현 여부와 화면 캡처를 확인할 수 있습니다.</p><div class="form-actions"><button class="btn primary" id="basicSubmit">시나리오 생성·검증</button></div><p id="basicFeedback" class="qa-feedback" role="status"></p></form></details>
+      <details class="panel qa-intake" id="scriptImport" hidden><summary><header><h2>고급 · YAML 스크립트 가져오기</h2><p>YAML 파일을 등록하면 승인 대기 상태로 추가됩니다.</p></header></summary><form id="importForm" class="admin-form"><label for="scriptFile">YAML 파일<input id="scriptFile" type="file" accept=".yaml,.yml"></label><div class="import-box"><label for="importYAML">검사 내용</label><textarea id="importYAML" required spellcheck="false" aria-label="검사 YAML"></textarea></div><div class="form-actions"><p class="form-note">선택한 프로젝트에 읽기 전용 검사를 등록합니다. 기존 ID는 덮어쓰지 않습니다.</p><button class="btn primary" id="importSubmit">검사 등록</button></div><p id="importFeedback" class="qa-feedback" role="status"></p></form></details>
       <div class="split single" id="split">
         <section class="panel list-panel" aria-label="스크립트 목록">
           <header><h2>전체 목록</h2><p>한 줄이 검사 하나입니다. 상태를 눌러 골라 보세요.</p></header>
@@ -50,7 +56,7 @@
           <p class="chipdesc" id="chipDesc"></p>
           <div class="body">
             <table class="list-table">
-              <caption class="sr-only">검사 스크립트 목록</caption>
+              <caption class="sr-only">검사 관리 목록</caption>
               <!-- 로딩 뼈대는 항상 있는 세 열만 그립니다. '할 수 있는 일' 열은 조작할 수
                    있는 행이 있을 때만 생기므로, 여기에 미리 그리면 다 불러온 뒤 머리글 수가
                    줄어 보입니다. -->
@@ -78,10 +84,10 @@
 const CHIPS = [
   { key: 'PENDING_APPROVAL', label: '승인 대기', states: ['PENDING_APPROVAL'],
     desc: () => '사람이 확인하고 승인해야 자동 실행이 시작됩니다.',
-    empty: '승인 기다리는 검사가 없습니다. 확인하고 싶은 화면이 있으면 <a href="/#qaIntake">할 일 화면에서 직접 확인 요청하기</a>에 상황을 적어 주세요. Jira 이슈나 운영 로그에서 만들어진 검사도 여기에 옵니다.',
+    empty: '승인 기다리는 검사가 없습니다. 확인하고 싶은 화면이 있으면 <a href="/#qaIntake">업무 개요 화면에서 직접 확인 요청하기</a>에 상황을 적어 주세요. Jira 이슈나 운영 로그에서 만들어진 검사도 여기에 옵니다.',
     cmd: '터미널에서는 <span class="mono">vigil reproduce &lt;이슈 키&gt;</span>로 이슈 증상을 재현합니다.' },
   { key: 'ACTIVE', label: '정식 검사', states: ['ACTIVE'],
-    desc: (at) => `이 검사들은 매일 ${at}과 배포 직후에 자동으로 실행됩니다. 실패하면 할 일 화면에 올라옵니다.`,
+    desc: (at) => data?.on_demand ? '검토를 마친 검사입니다. 실행할 사이트를 선택해 수동으로 확인할 수 있습니다.' : `이 검사들은 매일 ${at}과 배포 직후에 자동으로 실행됩니다. 실패하면 업무 개요 화면에 올라옵니다.`,
     empty: '매일 자동으로 도는 검사가 아직 없습니다. <a href="/scripts?state=PENDING_APPROVAL">승인 대기</a>에서 검사를 승인하면 여기로 옵니다.',
     cmd: '터미널에서는 <span class="mono">vigil approve &lt;검사 이름&gt;</span>으로 승인합니다.' },
   { key: 'SOAK', label: '안정화 중', states: ['SOAK'],
@@ -107,12 +113,14 @@ const CHIPS = [
     cmd: '터미널에서는 <span class="mono">vigil reject &lt;검사 이름&gt;</span>으로 반려합니다.' },
   { key: 'ALL', label: '전체', states: null,
     desc: () => '모든 검사입니다. 상태 칩을 눌러 필요한 것만 볼 수 있습니다.',
-    empty: '검사가 하나도 없습니다. 확인하고 싶은 화면이 있으면 <a href="/#qaIntake">할 일 화면에서 직접 확인 요청하기</a>에 상황을 적어 주세요. AI가 대신 눌러 보고 검사 절차를 만듭니다.',
+    empty: '등록된 검사가 없습니다. 이 화면의 검사 만들기에서 확인할 문구를 입력하거나 기존 스크립트를 가져오세요.',
     cmd: '터미널에서는 <span class="mono">vigil add</span>로 직접 쓰거나 <span class="mono">vigil discover</span>로 AI에게 맡길 수 있습니다.' },
 ];
 const PAGE_SIZE = 20;
 
 const params = new URLSearchParams(location.search);
+let activeExecutionID=params.get('job') || '';
+let executionTimer=null, executionEpoch=0;
 let data = null, selected = params.get('id') || null, selectedVersion = null,
   queryRaw = params.get('q') || '', query = queryRaw.trim().toLowerCase(),
   chip = params.get('state') || '', chipTouched = !!chip, shown = PAGE_SIZE, popover = null,
@@ -138,9 +146,9 @@ function chipMatch(c, s) { return c.match ? c.match(s) : (!c.states || c.states.
 function inChip(s, key) { return chipMatch(chipFor(key), s); }
 
 // 주소에 남기는 것: 상태 칩(state), 열린 항목(id), 검색어(q), 정렬(sort).
-// 기존 파라미터 이름은 할 일 화면의 카드가 가리키므로 그대로 둡니다.
+// 기존 파라미터 이름은 업무 개요 화면의 카드가 가리키므로 그대로 둡니다.
 function syncURL() {
-  const p = new URLSearchParams();
+  const p = new URLSearchParams(); if(activeExecutionID)p.set('job',activeExecutionID); if (selectedProject) p.set('project', selectedProject);
   if (chip) p.set('state', chip);
   if (selected) p.set('id', selected);
   if (queryRaw.trim()) p.set('q', queryRaw.trim());
@@ -209,7 +217,7 @@ const NEXT_ON_ROW = ['PENDING_APPROVAL', 'SOAK', 'NEEDS_REVIEW', 'QUARANTINED', 
 function rowHTML(s, acts) {
   const sel = selected === s.id;
   const last = s.last_outcome ? `${stTip(OUTCOME, s.last_outcome)}<div class="sub">${s.last_run_at ? esc(ago(s.last_run_at)) : ''}</div>` : '<span class="sub">실행 기록 없음</span>';
-  const next = NEXT_ON_ROW.includes(s.state) ? `<div class="sub next">${esc(nextStep(s, data.daily_at))}</div>` : '';
+  const next = NEXT_ON_ROW.includes(s.state) ? `<div class="sub next">${esc(nextStep(s, data.daily_at, data.on_demand))}</div>` : '';
   const cell = acts ? `<td class="fit actcell">${ACTIONABLE.includes(s.state) ? actionCell(s) : ''}</td>` : '';
   return `<tr class="${sel ? 'sel' : ''}">
     <td class="title"><button class="linklike" data-open="${esc(s.id)}" aria-pressed="${sel}">${esc(s.title || s.id)}</button>
@@ -236,14 +244,14 @@ function popHTML(s) {
   const envs = (data && data.envs) || [], def = data && data.default_env;
   if (popover.kind === 'run') {
     return `<div class="pop" role="group" aria-label="지금 한 번 실행">
-      <p class="sub">지금 한 번만 실행합니다. 상태는 바뀌지 않습니다.</p>
-      <label>환경 <select id="actEnv">${envs.map(e => `<option value="${esc(e)}"${e === def ? ' selected' : ''}>${esc(e)}</option>`).join('')}</select></label>
-      <label>브라우저 <select id="actBrowser"><option value="lightpanda">${esc(BROWSER.lightpanda)}</option><option value="chromium">${esc(BROWSER.chromium)}</option></select></label>
-      <button class="btn primary" id="popGo">실행 대기열에 넣기</button>
+      <p class="sub">선택한 사이트에서 한 번 실행하고 결과를 기록합니다.</p>
+      <label>환경 <select id="actEnv">${envs.map(e => `<option value="${esc(e)}"${e === def ? ' selected' : ''}>${esc(e)} · ${esc(data.env_urls?.[e] || "")}</option>`).join('')}</select></label>
+      <label>브라우저 <select id="actBrowser"><option value="lightpanda"${data.default_browser === "lightpanda" ? " selected" : ""}>${esc(BROWSER.lightpanda)}</option><option value="chromium"${data.default_browser === "chromium" ? " selected" : ""}>${esc(BROWSER.chromium)}</option></select></label>
+      <button class="btn primary" id="popGo">지금 실행</button>
       <button class="btn" id="popCancel">취소</button></div>`;
   }
   if (popover.kind === 'approve') {
-    const when = `매일 ${esc((data && data.daily_at) || '09:00')}에 자동 실행`;
+    const when = data.on_demand ? '정식 검사로 등록. 실행 버튼으로 수동 검증' : `매일 ${esc((data && data.daily_at) || '09:00')}에 자동 실행`;
     const jira = s.source_kind === 'issue' && s.source_ref ? `되고 ${esc(s.source_ref)}에 승인 댓글이 달립니다` : '됩니다';
     const note = s.state === 'NEEDS_REVIEW' ? '안정화 단계부터 다시 시작하고, 연속 통과하면 정식 검사가 됩니다.' : `${when}${jira}.`;
     return `<div class="pop warn" role="group" aria-label="승인 확인">
@@ -289,16 +297,19 @@ async function scriptAction(kind, s, extra) {
   const idx = [...document.querySelectorAll('#list button[data-open]')].findIndex(b => b.dataset.open === s.id);
   document.querySelectorAll('button[data-act]').forEach(b => b.disabled = true);
   receipts[s.id] = '처리 중입니다…';
+ if(kind==='run' && data?.on_demand){$('executionPanel').hidden=false;$('executionTitle').textContent=s.title||s.id;$('executionMessage').textContent='실행을 준비하고 있습니다.';$('executionSteps').innerHTML='';$('executionImage').innerHTML='';$('executionPanel').focus();}
   render();
   try {
     const r = await fetch(`/api/script/${kind}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: s.id, ...extra }) });
     if (!r.ok) throw await httpFail(r, '요청을 처리하지 못했습니다.');
     const body = await r.json().catch(() => ({}));
     receipts[s.id] = esc(body.message || '');
-    toast(kind === 'run' ? '실행을 대기열에 넣었습니다. 결과는 검증 결과 화면에 나옵니다.' : kind === 'approve' ? '승인했습니다.' : '반려했습니다.');
+ if(kind==='run' && data?.on_demand && body.job_id){watchExecution(body.job_id);receipts[s.id]='실행 상황을 위에서 확인할 수 있습니다.';}
+    toast(kind === 'run' ? (data?.on_demand ? '검사를 시작합니다. 진행 상황을 표시합니다.' : '실행을 요청했습니다.') : kind === 'approve' ? '승인했습니다.' : '반려했습니다.');
   } catch (e) {
     // 사람이 읽을 한 문장만 남기고 원문은 개발자 정보 모드에서만 보이게 합니다.
     receipts[s.id] = errHTML(e);
+ if(kind==='run' && data?.on_demand)$('executionMessage').textContent=e.message;
     toast(e.message || '요청을 처리하지 못했습니다.');
   }
   // 서버에서 상태와 다음 차례를 다시 읽습니다. 기다리지 않으면 뒤늦게 도착한 응답이
@@ -306,7 +317,7 @@ async function scriptAction(kind, s, extra) {
   await poll.refresh();
   render();
   // 누른 버튼은 재렌더로 사라졌습니다. 다음 건으로 이어 가도록 자리를 잡아 줍니다.
-  focusAfterAction(s.id, idx);
+  if(kind==='run' && data?.on_demand)$('executionPanel').focus();else focusAfterAction(s.id, idx);
 }
 
 // ---- detail panel: one section per question --------------------------------
@@ -328,15 +339,16 @@ function renderDetail(s) {
   d.innerHTML = `
     <header><h2>${esc(s.title || s.id)}</h2><button class="btn act" id="closeDetail">닫기</button></header>
     <div class="body">
+      ${(s.recent_runs||[])[0]?.screenshot ? `<button type="button" class="execution-capture" data-screenshot="${esc(s.recent_runs[0].screenshot)}" data-title="${esc(s.title||s.id)}"><img src="${projectURL('/evidence/'+s.recent_runs[0].screenshot)}" alt="최근 검증 화면"><span>최근 검증 화면 확대</span></button>` : ''}
       <section class="sect">
         <h3>요약</h3><p class="sub">이 검사가 무엇이고 지금 어떤 상태인지</p>
         <div class="agent-head">${stTip(STATE, s.state)}${sourceChip(s)}<span class="sub">${esc(CLASS[s.class] || s.class)}</span><span class="sub">브라우저 ${esc(BROWSER[s.browser] || s.browser)}</span><span class="sub">${esc(s.mutation === 'read-only' ? '읽기 전용' : s.mutation === 'reversible' ? '되돌릴 수 있는 변경' : '파괴적 변경')}</span></div>
-        <p class="sub next">${esc(nextStep(s, data.daily_at))}</p>
+        <p class="sub next">${esc(nextStep(s, data.daily_at, data.on_demand))}</p>
         <dl class="kv">
           <dt>이름</dt><dd class="mono">${esc(s.id)}</dd>
           <dt>판정 근거</dt><dd>${tip(ORACLE[s.oracle] || s.oracle || '없음', GLOSS[s.oracle] || '근거가 없습니다. 실패해도 결함이라 단정할 수 없습니다.')}</dd>
           <dt>검사 이력</dt><dd>${s.runs}회 검사, ${s.passes}회 정상${s.flakes ? `, ${s.flakes}회는 다시 하니 통과` : ''}${s.last_run_at ? ` · 최근 ${ago(s.last_run_at)}` : ''}</dd>
-          <dt>다음 검사</dt><dd>${['ACTIVE', 'SOAK'].includes(s.state) ? esc(s.next_due_at ? until(s.next_due_at) + ` (${when(s.next_due_at)})` : '곧') + (s.cadence === 'daily' ? ` · 매일 ${esc(data.daily_at || '')}${s.approved_at ? `, 승인 ${esc(when(s.approved_at))}` : ''}` : '') : '예정 없음'}</dd>
+          <dt>다음 검사</dt><dd>${data.on_demand ? '수동 실행' : ['ACTIVE', 'SOAK'].includes(s.state) ? esc(s.next_due_at ? until(s.next_due_at) + ` (${when(s.next_due_at)})` : '곧') + (s.cadence === 'daily' ? ` · 매일 ${esc(data.daily_at || '')}${s.approved_at ? `, 승인 ${esc(when(s.approved_at))}` : ''}` : '') : '예정 없음'}</dd>
           ${s.source_ref ? `<dt>출처</dt><dd>${esc(s.source_kind === 'issue' ? '이슈' : s.source_kind === 'log' ? '운영 로그' : s.source_kind || '')} <span class="mono">${esc(s.source_ref)}</span></dd>` : ''}
           ${s.locks && s.locks.length ? `<dt>공유 자원</dt><dd>${s.locks.map(esc).join(', ')}</dd>` : ''}
         </dl>
@@ -357,7 +369,7 @@ function renderDetail(s) {
             <td class="fit">${stTip(OUTCOME, r.outcome)}</td>
             <td><div class="sub">${esc(when(r.finished_at))} (${esc(ago(r.finished_at))}) · ${esc(BROWSER[r.browser] || r.browser)}${r.environment ? ' · 환경 ' + esc(r.environment) : ''}${r.duration_ms ? ' · ' + esc(secs(r.duration_ms)) : ''}</div>
               ${causeHTML(r, 'srun' + r.run_id)}</td>
-            <td class="fit">${r.evidence_rel ? `<a class="btn" href="/evidence/${esc(r.evidence_rel)}/" target="_blank" rel="noopener">증거</a>` : ''}</td></tr>`).join('')}</tbody></table>`
+            <td class="fit">${r.screenshot ? `<button class="btn" data-screenshot="${esc(r.screenshot)}" data-title="${esc(s.title||s.id)}">화면 보기</button>` : '<span class="sub">캡처 없음</span>'}</td></tr>`).join('')}</tbody></table>`
           : '<div class="empty">아직 실행 기록이 없습니다. 위의 <b>▶ 실행</b>으로 한 번 돌려 볼 수 있습니다.</div>'}
       </section>
 
@@ -433,6 +445,43 @@ poll.start();
 // 레일 배지는 이 화면의 목록이 아니라 사람이 손대야 할 건수를 말하므로
 // /api/todo 를 따로, 드문드문 읽습니다.
 railBadgePoll();
+
+projectRegistry.then(r=>{if(r){$('scriptImport').hidden=false;}});
+$('scriptFile').onchange=async e=>{const f=e.target.files[0];if(f){if(f.size>200000){$('importFeedback').textContent='파일은 200KB 이하로 선택하세요.';return}$('importYAML').value=await f.text()}};
+$('importForm').onsubmit=async e=>{e.preventDefault();$('importSubmit').disabled=true;try{const r=await fetch('/api/script/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({yaml:$('importYAML').value})});if(!r.ok)throw await httpFail(r,'등록하지 못했습니다.');const result=await r.json();location.href=projectURL('/scripts?state=PENDING_APPROVAL&id='+encodeURIComponent(result.id));}catch(e){$('importFeedback').textContent=e.message}finally{$('importSubmit').disabled=false}};
+
+projectRegistry.then(r=>{if(!r)return;const p=r.projects.find(p=>p.id===(selectedProject||r.default_project));if(!p)return;$('simpleCheck').hidden=false;for(const site of p.sites){const option=document.createElement('option');option.value=site.id;option.textContent=site.name+' · '+site.url;$('basicSite').append(option)}$('basicSite').value=p.default_site;if(location.hash==='#import'){$('simpleCheck').open=true;$('qaScenario').focus()}});
+let basicSaving=false;
+$('basicForm').onsubmit=async event=>{
+ event.preventDefault();if(basicSaving)return;basicSaving=true;$('basicSubmit').disabled=true;$('basicFeedback').textContent='요청을 접수하고 있습니다.';
+ try{
+  const response=await fetch('/api/requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({situation:$('qaScenario').value.trim(),site:$('basicSite').value})});
+  if(!response.ok)throw await httpFail(response,'요청을 시작하지 못했습니다.');
+  const receipt=await response.json();$('basicFeedback').textContent='검증을 시작했습니다. 위에서 진행 상황을 확인하세요.';$('simpleCheck').open=false;watchExecution(receipt.job_id);
+ }catch(error){$('basicFeedback').textContent=error.message}
+ finally{basicSaving=false;$('basicSubmit').disabled=false}
+};
+
+function watchExecution(job) {
+ activeExecutionID=String(job);$('executionImage').innerHTML='';$('executionLinks').innerHTML='';$('executionBadge').innerHTML='';clearTimeout(executionTimer);const epoch=++executionEpoch;syncURL();const panel=$('executionPanel');panel.hidden=false;panel.focus();
+ async function refreshExecution(){
+  try{const response=await fetch('/api/execution?job='+encodeURIComponent(job));if(!response.ok)throw new Error('실행 상황을 불러오지 못했습니다.');const e=await response.json();if(epoch!==executionEpoch)return;
+   $('executionTitle').textContent=e.title||e.scenario||'검사 실행';$('executionSite').textContent=e.url||e.site||'';
+   const phase={checking:'에이전트 연결 확인 중',investigating:'시나리오 분석·사이트 탐색 중',validating:'생성한 스크립트 검증 중',repairing:'검사 스크립트 보완 중',preparing:'브라우저 준비 중',running:'검사 실행 중',saving:'화면 캡처와 결과 저장 중',completed:'검사 완료'};
+   $('executionBadge').innerHTML=e.completed?(e.outcome==='NEEDS_REVIEW'?'<span class="st st-warn">결과 확인 필요</span>':st(OUTCOME,e.outcome)):'<span class="st st-info"><i></i>'+esc(phase[e.phase]||'진행 중')+'</span>';
+   $('executionMessage').textContent=e.message||phase[e.phase]||'실행 상태를 확인하고 있습니다.';
+   $('executionDetails').open=!e.completed;
+   if(!e.completed && e.preview){const src=projectURL('/evidence/'+e.preview);if($('executionImage').dataset.preview!==src){$('executionImage').dataset.preview=src;$('executionImage').innerHTML=`<img class="execution-preview" src="${esc(src)}" alt="에이전트가 마지막으로 캡처한 실행 화면"><p class="sub">마지막으로 확인한 화면 · 새 캡처가 생기면 갱신됩니다.</p>`;}}
+   $('executionSteps').innerHTML=(e.steps||[]).map(s=>`<li class="execution-${s.state}"><span>${s.index}. ${esc(STEP[s.name]||s.name)}</span><b>${({running:'진행 중',done:'완료',failed:'확인 실패'})[s.state]||''}</b></li>`).join('');
+   if(e.completed){if(e.screenshot){const src=projectURL('/evidence/'+e.screenshot);$('executionImage').innerHTML=`<button type="button" class="execution-capture" data-screenshot="${esc(e.screenshot)}" data-title="${esc(e.title||e.scenario)}"><img src="${esc(src)}" alt="검증 당시의 화면 캡처"><span>화면 확대해서 보기</span></button>`;}else $('executionImage').innerHTML='<p class="sub">이 실행에는 화면 캡처가 없습니다.</p>';
+    $('executionLinks').innerHTML=(e.scripts||[]).map(s=>`<article class="execution-script"><h3>${s.id?`<a href="${projectURL('/scripts?state=ALL&id='+encodeURIComponent(s.id))}">${esc(s.title||s.id)}</a>`:'스크립트 확인 필요'}</h3><p>${esc(s.message)}</p>${s.reproduction?`<p>${s.outcome==='PASS'?'이번 실행에서 기대 동작 확인':s.reproduction.verdict==='confirmed'?'버그 재현 확인':s.reproduction.verdict==='disputed'?'재현 판단 확인 필요':'재현 여부 미확정'} · ${esc(s.reproduction.why||s.reproduction.note||'')}</p>`:''}${s.screenshot?`<button class="btn" data-screenshot="${esc(s.screenshot)}" data-title="${esc(s.title||s.id)}">화면 보기</button>`:''}</article>`).join('')+`<a class="section-link" href="${projectURL('/results')}">전체 결과 보기</a>`;await poll.refresh();return;
+   }
+   executionTimer=setTimeout(refreshExecution,document.hidden?2000:800);
+  }catch(e){if(epoch!==executionEpoch)return;$('executionMessage').textContent=e.message+' 검사는 계속 진행 중일 수 있습니다.';$('executionLinks').innerHTML='<button class="btn" id="retryExecution">상태 다시 확인</button>';$('retryExecution').onclick=()=>watchExecution(job);}
+ }
+ refreshExecution();
+}
+if(activeExecutionID)watchExecution(activeExecutionID);
 </script>
 </body>
 </html>

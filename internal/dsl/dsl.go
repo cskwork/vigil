@@ -626,8 +626,8 @@ func validateStep(s Step) error {
 			return fmt.Errorf("script required")
 		}
 	case "goto":
-		if !strings.HasPrefix(s.Goto, "/") && !strings.HasPrefix(s.Goto, "http") {
-			return fmt.Errorf("goto must be a path or absolute URL")
+		if s.Goto != "#" && !strings.HasPrefix(s.Goto, "/") && !strings.HasPrefix(s.Goto, "http") {
+			return fmt.Errorf("goto must be a path, absolute URL, or # for the configured site URL")
 		}
 	}
 	return nil

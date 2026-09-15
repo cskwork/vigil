@@ -65,6 +65,8 @@ type todoPayload struct {
 	DailyCount int    `json:"daily_count"`
 	// CanRequest mirrors /api/requests: a standalone `serve` cannot run one.
 	CanRequest bool `json:"can_request"`
+	OnDemand   bool `json:"on_demand"`
+	CanRun     bool `json:"can_run"`
 }
 
 // specOracle marks the scripts whose failure is a statement about the product
@@ -76,7 +78,7 @@ func (s *Server) todo(w http.ResponseWriter, r *http.Request) {
 	p := s.cfg.Project.ID
 	now := time.Now()
 	out := todoPayload{Project: p, Target: s.cfg.Target.BaseURL, Recent: []todoRecent{},
-		DailyAt: s.cfg.Schedule.DailyAt, CanRequest: s.requestSubmitter != nil}
+		DailyAt: s.cfg.Schedule.DailyAt, CanRequest: s.requestSubmitter != nil, OnDemand: s.onDemand, CanRun: s.scriptActions != nil && s.scriptActions.CanRun()}
 
 	titles := map[string]string{}
 	byID := map[string]*model.Scenario{}

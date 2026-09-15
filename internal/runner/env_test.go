@@ -50,3 +50,12 @@ func TestURLAllowed(t *testing.T) {
 		}
 	}
 }
+
+func TestConfiguredSiteURLPreservesPathAndQuery(t *testing.T) {
+	for _, base := range []string{"https://example.com/app/", "https://example.com/search?query=hello"} {
+		got, err := resolveURL(base, "#")
+		if err != nil || got != base {
+			t.Fatalf("configured URL changed: %q %v", got, err)
+		}
+	}
+}
