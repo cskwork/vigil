@@ -14,7 +14,8 @@
 // Agent transcript view), requests_list.go (GET /api/requests),
 // request_submit.go (POST /api/requests), scripts.go (/api/scripts,
 // /api/script), script_actions.go (POST /api/script/{run,approve,reject}), window.go (/api/schedule/window), supervisor.go
-// (/api/supervisor), format.go (shared JSON/format helpers).
+// (/api/supervisor), settings.go (/api/settings/agent, the operator's own LLM
+// access), format.go (shared JSON/format helpers).
 package ui
 
 import (
@@ -55,6 +56,9 @@ var reportHTML []byte
 //go:embed scripts.html
 var scriptsHTML []byte
 
+//go:embed settings.html
+var settingsHTML []byte
+
 //go:embed theme.css
 var themeCSS []byte
 
@@ -68,6 +72,9 @@ type Server struct {
 	devDir           string // when set, page assets are read from this directory on every request
 	requestSubmitter RequestSubmitter
 	scriptActions    ScriptActions
+	settings         SettingsStore
+	settingsWork     string
+	checkAgent       func(context.Context, *config.Config) error
 	onDemand         bool
 	submitMu         sync.Mutex
 	lastSubmitByHost map[string]time.Time
@@ -170,6 +177,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/activity", s.serveStatic(newStatic("activity.html", html, activityHTML)))
 	mux.HandleFunc("/report", s.serveStatic(newStatic("report.html", html, reportHTML)))
 	mux.HandleFunc("/scripts", s.serveStatic(newStatic("scripts.html", html, scriptsHTML)))
+	mux.HandleFunc("/settings", s.serveStatic(newStatic("settings.html", html, settingsHTML)))
 	mux.HandleFunc("/ui/theme.css", s.serveStatic(newStatic("theme.css", "text/css; charset=utf-8", themeCSS)))
 	mux.HandleFunc("/ui/app.js", s.serveStatic(newStatic("app.js", "text/javascript; charset=utf-8", appJS)))
 
@@ -186,6 +194,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/script/reject", s.scriptReject)
 	mux.HandleFunc("/api/schedule/window", s.scheduleWindow)
 	mux.HandleFunc("/api/supervisor", getOnly(s.supervisor))
+	mux.HandleFunc("/api/settings/agent", s.agentSettings)
 	mux.HandleFunc("/api/agent/latest", getOnly(s.agentLatest))
 	// Evidence is already secret-redacted by the runner/agent adapter; serve it read-only.
 	mux.Handle("/evidence/", http.StripPrefix("/evidence/", http.FileServer(http.Dir(s.evRoot))))

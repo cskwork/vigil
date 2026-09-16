@@ -5,6 +5,8 @@ package agent
 import (
 	"context"
 	"time"
+
+	"vigil/internal/attach"
 )
 
 // Task kinds map to orchestrator actions.
@@ -63,6 +65,29 @@ type Request struct {
 	// DomainRules is the bounded text of agent.domain_file; rendered as its own
 	// prompt section (not inside the YAML dump of the request).
 	DomainRules string `yaml:"-" json:"domain_rules,omitempty"`
+	// Attachments are the screenshots and recording frames the requester
+	// uploaded. They may be the only description of the requested scenario, so
+	// the adapter hands the image files to the model, not just their paths.
+	Attachments []attach.Attachment `yaml:"attachments,omitempty" json:"attachments,omitempty"`
+}
+
+// MaxInlineImages bounds how many attachment images are handed to the model
+// directly. Everything stored is still listed in the prompt with its path, so
+// the agent can open the rest itself when it needs them.
+const MaxInlineImages = 16
+
+// AttachedImages lists the image files handed to the model, in request order.
+func (r Request) AttachedImages() []string {
+	var out []string
+	for _, a := range r.Attachments {
+		for _, f := range a.Readable() {
+			if len(out) >= MaxInlineImages {
+				return out
+			}
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // Finding kinds a data-analyst pass may report (PRD WI-E).

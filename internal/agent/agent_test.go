@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"vigil/internal/attach"
 	"vigil/internal/config"
 	"vigil/internal/dsl"
 )
@@ -178,6 +180,42 @@ func TestPiArgvShape(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("argv missing %q: %s", want, joined)
 		}
+	}
+}
+
+func TestPiArgvHandsAttachmentImagesToTheModel(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Agent.Thinking = "high"
+	p := &pi{cfg: cfg, piPath: "/x/bin/pi", extension: "/x/ext/index.js", tools: "agent_browser,read"}
+	req := Request{Attachments: []attach.Attachment{
+		{Name: "shot.png", Kind: attach.KindImage, Path: "/up/shot.png"},
+		{Name: "clip.mp4", Kind: attach.KindVideo, Path: "/up/clip.mp4", Frames: []string{"/up/f1.jpg", "/up/f2.jpg"}},
+	}}
+	argv := p.piArgvSession(ModelEntry{Provider: "zai", Model: "glm-5.3-flash", Thinking: "high"}, "SYS", "TASK", "", "", req.AttachedImages())
+	joined := strings.Join(argv, " ")
+	// pi reads `@path` arguments as attachments; the video container is never one.
+	if !strings.Contains(joined, "-- @/up/shot.png @/up/f1.jpg @/up/f2.jpg TASK") {
+		t.Fatalf("attachments not passed as @files: %s", joined)
+	}
+	if strings.Contains(joined, "clip.mp4") {
+		t.Fatalf("video container passed to the model: %s", joined)
+	}
+}
+
+func TestAttachedImagesIsBounded(t *testing.T) {
+	var frames []string
+	for i := 0; i < 40; i++ {
+		frames = append(frames, fmt.Sprintf("/up/f%02d.jpg", i))
+	}
+	req := Request{Attachments: []attach.Attachment{{Kind: attach.KindVideo, Frames: frames}}}
+	if got := len(req.AttachedImages()); got != MaxInlineImages {
+		t.Fatalf("inline images = %d, want %d", got, MaxInlineImages)
+	}
+}
+
+func TestCustomProviderExtensionNeedsEveryField(t *testing.T) {
+	if _, err := CustomProviderExtension(t.TempDir(), "id", "model", "", "KEY", true); err == nil {
+		t.Fatal("missing base URL accepted")
 	}
 }
 
@@ -379,5 +417,40 @@ func TestParseResultReproductionBlock(t *testing.T) {
 	}
 	if !strings.Contains(SystemPrompt(), "reproduction:") {
 		t.Fatal("system prompt must document the reproduction block")
+	}
+}
+
+func TestAgentEnvPrefersTheOperatorCredential(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Agent.EnvMap = map[string]string{"ZAI_API_KEY": "Z_AI_API_KEY"}
+	cfg.Agent.Credential = &config.AgentCredential{
+		Provider: "zai", Model: "glm-5.3-flash", Thinking: "high", EnvVar: "ZAI_API_KEY", APIKey: "console-key",
+	}
+	env := agentEnv(cfg, "", "")
+	if got := envValue(env, "ZAI_API_KEY"); got != "console-key" {
+		t.Fatalf("ZAI_API_KEY = %q, want the console key", got)
+	}
+	// Doctor reads this same environment, so a console key satisfies env_map
+	// even when the server has no exported key.
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PI_CODING_AGENT_DIR=") {
+			t.Fatalf("credential must not redirect the pi config dir: %s", kv)
+		}
+	}
+}
+
+func TestAgentEnvAddsTheGeneratedProviderExtension(t *testing.T) {
+	dir := t.TempDir()
+	ext, err := CustomProviderExtension(dir, "vigil-custom", "m", "https://gw.example.com/v1", "VIGIL_CUSTOM_API_KEY", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.Agent.Thinking = "high"
+	cfg.Agent.Credential = &config.AgentCredential{Provider: "vigil-custom", Model: "m", Thinking: "high", EnvVar: "VIGIL_CUSTOM_API_KEY", APIKey: "k", Extension: ext}
+	p := &pi{cfg: cfg, piPath: "/x/bin/pi", extension: "/x/ext/index.js", tools: "agent_browser,read"}
+	argv := p.piArgv(ModelEntry{Provider: "vigil-custom", Model: "m", Thinking: "high"}, "SYS", "TASK")
+	if !strings.Contains(strings.Join(argv, " "), "-e "+ext) {
+		t.Fatalf("generated provider extension not loaded: %v", argv)
 	}
 }

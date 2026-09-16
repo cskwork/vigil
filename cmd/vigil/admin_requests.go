@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"vigil/internal/agent"
+	"vigil/internal/attach"
 	"vigil/internal/model"
 	"vigil/internal/orchestrator"
 	"vigil/internal/scheduler"
+	"vigil/internal/settings"
 )
 
 type invalidAdminSite struct{}
@@ -29,12 +31,17 @@ type adminRequests struct {
 	app     *app
 	actions *adminActions
 	run     progressRunner
+	llm     *settings.Store
+	llmWork string
 }
 
 func (a *adminRequests) SubmitUserRequest(ctx context.Context, situation string) (string, int64, error) {
-	return a.SubmitUserRequestAt(ctx, situation, "")
+	return a.SubmitUserRequestWith(ctx, situation, "", nil)
 }
 func (a *adminRequests) SubmitUserRequestAt(ctx context.Context, situation, site string) (string, int64, error) {
+	return a.SubmitUserRequestWith(ctx, situation, site, nil)
+}
+func (a *adminRequests) SubmitUserRequestWith(ctx context.Context, situation, site string, attachments []attach.Attachment) (string, int64, error) {
 	env, err := a.app.cfg.Env(site)
 	if err != nil {
 		return "", 0, invalidAdminSite{}
@@ -45,14 +52,27 @@ func (a *adminRequests) SubmitUserRequestAt(ctx context.Context, situation, site
 	// Each request keeps its selected site for investigation and every validation/repair.
 	cfg := *a.app.cfg
 	cfg.Target.DefaultEnv, cfg.Target.BaseURL, cfg.Target.AllowedHosts = env.Name, env.BaseURL, env.AllowedHosts
-	ag, err := agent.NewPi(&cfg)
+	// The operator's saved LLM choice is read per request, so a settings change
+	// applies to the next request without restarting the console.
+	if a.llm != nil {
+		saved, err := a.llm.Load()
+		if err != nil {
+			a.actions.busy.Store(false)
+			return "", 0, fmt.Errorf("LLM 설정을 읽지 못했습니다: %w", err)
+		}
+		if err := saved.Apply(&cfg, a.llmWork); err != nil {
+			a.actions.busy.Store(false)
+			return "", 0, err
+		}
+	}
+	ag, err := agent.New(&cfg)
 	if err != nil {
 		a.actions.busy.Store(false)
 		return "", 0, err
 	}
 	tracked := &adminAgent{Adapter: ag, tracker: a.actions.progress}
 	o := orchestrator.NewWithRunner(&cfg, a.app.st, a.run, tracked, a.app.ev)
-	feature, id, err := o.SubmitUserRequest(ctx, situation)
+	feature, id, err := o.SubmitUserRequestWith(ctx, situation, attachments)
 	if err != nil {
 		a.actions.busy.Store(false)
 		return "", 0, err
@@ -60,6 +80,9 @@ func (a *adminRequests) SubmitUserRequestAt(ctx context.Context, situation, site
 	title := strings.SplitN(strings.TrimSpace(situation), "\n", 2)[0]
 	if chars := []rune(title); len(chars) > 100 {
 		title = string(chars[:100]) + "…"
+	}
+	if title == "" {
+		title = fmt.Sprintf("첨부 자료로 접수한 요청 (%d개)", len(attachments))
 	}
 	a.actions.progress.begin(id, &model.Scenario{Title: title}, env.Name, env.BaseURL)
 	a.actions.progress.update(func(e *execution) { e.Kind = "request"; e.Phase = "checking" })

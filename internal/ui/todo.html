@@ -25,6 +25,7 @@
       <li><a href="/scripts"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
       <li class="nav-divider" aria-hidden="true"></li>
       <li><a href="/activity"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/settings"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>LLM 설정</span></a></li>
       <li><a href="/help"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
     </ul>
     <details class="rail-foot" id="railPrefs">
@@ -69,7 +70,11 @@
             <summary><header><h2>새 검증 요청</h2><p>확인할 화면과 기대하는 동작을 입력하세요.</p><span class="hint" id="qaHint">펼치기</span></header></summary>
             <form id="qaForm" class="qa-form">
               <label for="qaSituation">검증할 내용</label>
-              <textarea id="qaSituation" name="situation" rows="4" maxlength="8000" required aria-describedby="requestAvailability" placeholder="예: 네이버 메인에서 검색어를 입력하고 검색하면, 결과 화면에 입력한 검색어가 표시되어야 합니다."></textarea>
+              <textarea id="qaSituation" name="situation" rows="4" maxlength="8000" aria-describedby="requestAvailability" placeholder="예: 네이버 메인에서 검색어를 입력하고 검색하면, 결과 화면에 입력한 검색어가 표시되어야 합니다."></textarea>
+              <label class="qa-attach-label" for="qaFiles">화면 이미지 또는 녹화 영상 첨부 <span class="sub">(선택, 최대 8개)</span></label>
+              <input type="file" id="qaFiles" name="files" multiple accept="image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm">
+              <p class="sub" id="qaFilesNote">글 대신 화면만 올려도 됩니다. AI가 첨부를 읽고 가장 가능성이 높은 검증 시나리오를 찾아 확인합니다. 영상은 화면을 여러 장으로 나눠 분석합니다.</p>
+              <ul class="qa-attach-list" id="qaFileList" hidden></ul>
               <div class="qa-actions"><p class="sub" id="requestAvailability">데이터를 변경하지 않는 범위에서 확인합니다.</p><button class="btn primary" id="qaSubmit" type="submit" disabled>검증 요청 접수</button></div>
               <p id="qaFeedback" class="qa-feedback" role="status" aria-live="polite"></p>
             </form>
@@ -106,21 +111,64 @@ document.addEventListener('click', (e) => {
 if (location.hash === '#qaIntake') openIntake();
 
 let qaSubmitting = false;
+
+// 첨부 목록: 이름과 용량만 보여 주고, 제출 직전까지 브라우저에 둡니다.
+const MAX_FILES = 8, MAX_TOTAL_MB = 128;
+function renderFiles() {
+  const files = Array.from($('qaFiles').files || []);
+  const list = $('qaFileList');
+  list.hidden = files.length === 0;
+  list.innerHTML = files.map((f) => `<li>${esc(f.name)} <span class="sub">${(f.size / (1024 * 1024)).toFixed(1)}MB</span></li>`).join('');
+  syncSubmit();
+}
+function attachError() {
+  const files = Array.from($('qaFiles').files || []);
+  if (files.length > MAX_FILES) return `첨부는 ${MAX_FILES}개까지 올릴 수 있습니다.`;
+  const total = files.reduce((n, f) => n + f.size, 0);
+  if (total > MAX_TOTAL_MB * 1024 * 1024) return `첨부 전체 용량은 ${MAX_TOTAL_MB}MB를 넘을 수 없습니다.`;
+  return '';
+}
+function syncSubmit() {
+  const hasInput = $('qaSituation').value.trim() !== '' || ($('qaFiles').files || []).length > 0;
+  $('qaSubmit').disabled = qaSubmitting || !hasInput || !data?.can_request;
+}
+$('qaFiles').addEventListener('change', renderFiles);
+$('qaSituation').addEventListener('input', syncSubmit);
+
 $('qaForm').onsubmit = async (e) => {
   e.preventDefault();
   const situation = $('qaSituation').value.trim();
-  if (!situation || qaSubmitting || !data?.can_request) return;
+  const files = Array.from($('qaFiles').files || []);
+  if ((!situation && files.length === 0) || qaSubmitting || !data?.can_request) return;
+  const badAttachment = attachError();
+  if (badAttachment) {
+    $('qaFeedback').className = 'qa-feedback error';
+    $('qaFeedback').textContent = badAttachment;
+    return;
+  }
   qaSubmitting = true;
   $('qaSubmit').disabled = true;
   $('qaSubmit').textContent = '접수 중';
   $('qaForm').setAttribute('aria-busy', 'true');
   $('qaFeedback').className = 'qa-feedback';
-  $('qaFeedback').textContent = '요청을 접수하고 진행 중인 AI 작업을 안전하게 넘기는 중입니다.';
+  $('qaFeedback').textContent = files.length > 0
+    ? `첨부 ${files.length}개를 올리고 요청을 접수하는 중입니다. 영상이 있으면 화면을 나누는 데 시간이 걸릴 수 있습니다.`
+    : '요청을 접수하고 진행 중인 AI 작업을 안전하게 넘기는 중입니다.';
   try {
-    const r = await fetch('/api/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ situation }) });
+    let r;
+    if (files.length > 0) {
+      const form = new FormData();
+      form.append('situation', situation);
+      for (const f of files) form.append('files', f, f.name);
+      r = await fetch('/api/requests', { method: 'POST', body: form });
+    } else {
+      r = await fetch('/api/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ situation }) });
+    }
     const result = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(result.error || `접수하지 못했습니다 (HTTP ${r.status})`);
     $('qaSituation').value = '';
+    $('qaFiles').value = '';
+    renderFiles();
     $('qaFeedback').className = result.warning ? 'qa-feedback warning' : 'qa-feedback success';
     if (result.warning) { $('qaFeedback').textContent = result.warning; }
     else { $('qaFeedback').innerHTML = `요청을 접수했습니다. 이 요청(${esc(result.feature_id)})을 먼저 확인합니다. 진행 상황은 <a href="/results#requests">검증 결과 화면의 확인 요청 칸</a>에 표시됩니다.`; }
@@ -129,7 +177,7 @@ $('qaForm').onsubmit = async (e) => {
     $('qaFeedback').textContent = err.message;
   } finally {
     qaSubmitting = false;
-    $('qaSubmit').disabled = !data?.can_request;
+    syncSubmit();
     $('qaSubmit').textContent = '검증 요청 접수';
     $('qaForm').removeAttribute('aria-busy');
   }
@@ -194,7 +242,7 @@ function render() {
   $('runtimeNote').classList.toggle('connected', !!d.can_request);
   $('runtimeNote').textContent = d.on_demand ? '시나리오를 적으면 에이전트가 검사 스크립트를 만들고 실행합니다.' : d.can_request ? '요청 접수 가능 · 새 검증 요청을 등록할 수 있습니다.' : '조회 모드 · 결과를 조회할 수 있습니다. 새 검증 요청은 실행기 연결 후 접수할 수 있습니다.';
   $('requestAvailability').textContent = d.can_request ? '데이터를 변경하지 않는 범위에서 확인합니다.' : '실행기가 연결되어 있지 않아 접수할 수 없습니다. 작성 중인 내용은 화면에 유지됩니다.';
-  $('qaSubmit').disabled = qaSubmitting || !d.can_request;
+  syncSubmit();
   $('runnerState').textContent = d.on_demand ? '시나리오 요청 가능' : d.can_request ? '접수 가능' : '실행기 연결 필요';
   $('projectName').textContent = projectDisplayName || d.project || '미지정';
   try { const u = new URL(d.target); $('targetName').textContent = u.hostname; $('targetURL').textContent = d.target; if (['https:', 'http:'].includes(u.protocol)) $('targetURL').href = u.href; } catch { $('targetName').textContent = d.target || '미지정'; $('targetURL').removeAttribute('href'); }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"vigil/internal/attach"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -24,6 +26,20 @@ func SystemPrompt() string {
 	return systemPrompt
 }
 
+// BrowserTool is the tool name the pi adapter registers. CLI adapters reach the
+// same tool through MCP, where the client prefixes the server name.
+const BrowserTool = "agent_browser"
+
+// SystemPromptFor is SystemPrompt with the browser tool renamed, so an adapter
+// whose client prefixes MCP tool names (claude: mcp__vigil__agent_browser,
+// codex: vigil__agent_browser) keeps one contract instead of a second prompt.
+func SystemPromptFor(tool string) string {
+	if tool == "" || tool == BrowserTool {
+		return systemPrompt
+	}
+	return strings.ReplaceAll(systemPrompt, BrowserTool, tool)
+}
+
 // TaskPrompt renders the bounded request as the user message.
 func TaskPrompt(req Request) string {
 	var b strings.Builder
@@ -40,7 +56,7 @@ func TaskPrompt(req Request) string {
 	default:
 		b.WriteString("Task: " + req.Task + "\n")
 	}
-	if req.Instructions != "" && req.Task != TaskRepair {
+	if (req.Instructions != "" || len(req.Attachments) > 0) && req.Task != TaskRepair {
 		b.WriteString("\nThis is a MANUAL QA REQUEST. Perform the flow below on the deployed target exactly as a QA engineer would, capture evidence (screenshots after each meaningful step, network/console when relevant), then report. Interpret the supplied bug reproduction scenario, feature description, or pasted commit evidence. The user's explicitly stated expected behaviour is specification evidence: use oracle.source: spec and cite the request feature ID. Locators, button labels and observed URLs are implementation details; discovering them in the browser does NOT downgrade that stated expectation to an observation oracle. Assert only the requested expected behaviour, not unrelated page labels or extra sibling workflows. Follow the requested interactions exactly; do not substitute Enter for a requested button click, or switch to another flow to obtain a pass. If the requested action is blocked, retain the original flow and report the blocker. Implement executable multi-step E2E scripts with decision NEW_SCRIPT even when the expected-behaviour assertion fails: that failure is useful reproduction evidence. For a reported bug include a reproduction block with the symptom and what you actually observed. Preserve the user's expected behaviour; never weaken assertions to obtain a pass. If missing context, authentication, or environmental blockers prevent a meaningful script, return NEEDS_REVIEW and identify the missing information. Never modify the target service code. A commit hash alone is not evidence of its contents; use only supplied or actually retrieved evidence.\n")
 		if req.Mutation != "" && req.Mutation != "read-only" {
 			b.WriteString("The requester explicitly ALLOWS data changes of class '" + req.Mutation + "' on the listed accounts only (deploying content, submitting answers). Do not touch other accounts.\n")
@@ -50,7 +66,10 @@ func TaskPrompt(req Request) string {
 		}
 		b.WriteString("Economy: prefer \"get text\", \"wait --text\", \"find\" over \"snapshot -i\" (large). If a command times out, the page may be frozen: close that session, reopen the same URL in a NEW session name (e.g. student1b) and record in blocked_at whether the freeze reproduced. Take a screenshot after every meaningful step.\n")
 		b.WriteString("script_candidates MUST be complete vigil DSL YAML documents as strings (scenario/covers/steps/assert/oracle), never prose step lists.\n")
-		b.WriteString("\nInstructions:\n" + req.Instructions + "\n")
+		if req.Instructions != "" {
+			b.WriteString("\nInstructions:\n" + req.Instructions + "\n")
+		}
+		b.WriteString(attachmentSection(req))
 	}
 	if req.Instructions != "" && req.Task == TaskRepair {
 		b.WriteString("\nOriginal user scenario (context only; obey the repair contract and preserve all assertions):\n" + req.Instructions + "\n")
@@ -73,6 +92,50 @@ func TaskPrompt(req Request) string {
 	}
 	b.WriteString("Close the browser (args: [\"close\"]) before answering. ")
 	b.WriteString("Finish with exactly one fenced block ```yaml " + ResultFence + " ... ``` and nothing after it.\n")
+	return b.String()
+}
+
+// attachmentSection describes the uploaded screenshots and recording frames. The
+// adapter already hands the image files to the model; this tells it what they
+// are and what to do when they are the only description of the request.
+func attachmentSection(req Request) string {
+	if len(req.Attachments) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n## Attached evidence\n")
+	b.WriteString("The requester attached the following screen evidence. The images are supplied to you directly (and also exist at the paths below; open them with your file-reading tool if you cannot see them inline).\n")
+	for i, a := range req.Attachments {
+		files := a.Readable()
+		switch a.Kind {
+		case attach.KindVideo:
+			fmt.Fprintf(&b, "%d. recording %q", i+1, a.Name)
+			if a.Note != "" {
+				b.WriteString(" - " + a.Note)
+			}
+			b.WriteString("\n")
+			for j, f := range files {
+				fmt.Fprintf(&b, "   - frame %d/%d: %s\n", j+1, len(files), f)
+			}
+			if len(files) == 0 {
+				fmt.Fprintf(&b, "   - (no frame available: %s)\n", a.Path)
+			}
+		default:
+			fmt.Fprintf(&b, "%d. screenshot %q: %s\n", i+1, a.Name, a.Path)
+		}
+	}
+	if strings.TrimSpace(req.Instructions) == "" {
+		b.WriteString("\nThere is NO written description: the attached evidence is the entire request. Infer from it what the requester was doing and what they expected, then verify that reading in the browser before you write the scenario.\n")
+	} else {
+		b.WriteString("\nThe written instructions and the attached evidence describe the same request. When they disagree, trust what the evidence actually shows and say so in evidence.\n")
+	}
+	b.WriteString("How to read the evidence:\n")
+	b.WriteString("- Recover the flow: which screen, which URL or page title, which control was used, which values were entered, and what the screen showed afterwards. Video frames are in time order, so read them as the sequence of steps.\n")
+	b.WriteString("- Quote the concrete anchors you can actually see (page title, heading, button label, field label, error text, visible id/number). Those anchors, not your guess, are what you search for in the browser.\n")
+	b.WriteString("- Then choose the SINGLE most likely scenario the requester wants checked, open the deployed target, and confirm the screen and the controls match the evidence. If they do not match, follow what the deployed app actually shows and record the difference.\n")
+	b.WriteString("- State your reading in evidence as: what the attachment shows, which scenario you concluded from it, and any other plausible reading you rejected and why.\n")
+	b.WriteString("- An error message, a red state, or a wrong value in the evidence is the reported symptom: encode the EXPECTED behaviour as the assertion and add a reproduction block. If the evidence only shows a working flow, treat it as the flow to cover.\n")
+	b.WriteString("- If the evidence is too unclear to identify a screen or an expected result (unreadable, unrelated, or several unrelated flows), return NEEDS_REVIEW and say exactly which part was unreadable. Never invent a flow the evidence does not support.\n")
 	return b.String()
 }
 
@@ -115,6 +178,17 @@ You may repair locators, waits and navigation. You may not add, remove, reorder 
 
 ## Scenario DSL (vigil deterministic script)
 A scenario is one YAML document. Unknown keys are rejected.
+
+YAML quoting (the most common reason a candidate is thrown away): put every string
+value that is screen text in double quotes and escape the inner quotes. Korean UI
+labels routinely contain ": " (검색어: 주간보고), and an unquoted value that contains
+a colon, a quote, #, or that starts with one of [ { > | * & ! % @ is not parseable
+YAML. This applies everywhere, and above all to oracle.note and to assert_text /
+wait_for values, which is where you quote what you saw:
+  note: "첨부 화면은 \"검색어: 주간보고\"와 결과 3건을 보여 준다"   correct
+  note: 첨부 화면은 검색어: 주간보고와 결과 3건을 보여 준다           BROKEN
+Keep a note on one line; a value that must span lines uses a quoted string, never a
+raw line break.
 
 scenario:
   id: <kebab-case, ^[a-z0-9][a-z0-9._-]{1,79}$>

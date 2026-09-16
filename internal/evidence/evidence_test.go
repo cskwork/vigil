@@ -168,3 +168,27 @@ func TestIncidentLeadsWithCauseSentence(t *testing.T) {
 		t.Errorf("json cause = %q", doc.Cause)
 	}
 }
+
+func TestPruneRemovesOldRequestUploads(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	old := filepath.Join(s.RequestsDir(), "20200101T000000.000Z-aaaa")
+	recent := filepath.Join(s.RequestsDir(), time.Now().UTC().Format("20060102T150405.000Z")+"-bbbb")
+	for _, d := range []string{old, recent} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "01-shot.png"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Prune(3, 30); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("old upload kept: %v", err)
+	}
+	if _, err := os.Stat(recent); err != nil {
+		t.Fatalf("recent upload removed: %v", err)
+	}
+}

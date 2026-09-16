@@ -36,9 +36,51 @@ network and console details remain available separately. Each project has its
 own scripts and history, and results distinguish each site's latest run.
 
 This local-only command runs explicit checks. It does not start recurring
-schedules or Jira notifications. Requested generation uses the configured Pi agent
+schedules or Jira notifications. Requested generation uses the configured agent
 and browser extension; unavailable providers produce an explicit incomplete result. Existing `loop --ui` and
 `proof` workflows remain available. See [admin setup and scope](docs/admin-console.md).
+
+### Request with a screenshot or a recording
+
+A request does not have to be prose. Attach screenshots (PNG, JPEG, GIF, WebP)
+or a screen recording (MP4, MOV, WebM) and the agent reads them: it recovers the
+screen, the controls and the values from the evidence, picks the single most
+likely scenario the reporter wants checked, confirms that reading in the browser,
+and writes the reason it chose that reading into the result. A recording is split
+into evenly spaced frames with `ffmpeg` (install it, or attach stills instead);
+the container itself is never sent to the model. Up to 8 files, 128 MB in total,
+are stored under `evidence/requests/<timestamp>/` and age out with failure
+evidence (`evidence.retain_fail_days`). Text and attachments can be combined;
+when they disagree, the agent follows what the evidence shows and says so.
+
+### Bring your own LLM, or your own coding agent
+
+The **LLM 설정** screen (`/settings`, stored 0600 next to the project registry)
+decides who answers:
+
+| Choice | What runs | Credential |
+|---|---|---|
+| 관리자 기본 설정 | `vigil.yaml`'s `agent.models` chain | the server's environment |
+| 내 API 키 | vigil's own pi agent with your provider | Anthropic, GLM Coding Plan (Z.ai), OpenAI, or any OpenAI-compatible endpoint (base URL + model) |
+| 내 코딩 에이전트 | the CLI you are already signed in to: Claude Code, Codex or pi | that CLI's own subscription; vigil stores no key |
+
+A personal OpenAI-compatible endpoint is registered through a generated pi
+extension, so `~/.pi/agent/models.json` is never edited. A saved key is used as
+an environment variable, is masked in every response, and is checked against the
+provider's model catalog before it is stored.
+
+In 내 코딩 에이전트 mode the CLI keeps the same contract: the same system prompt,
+the same result block, and the same bounded browser tool, served to it over MCP
+by `vigil mcp-browser`. Neither CLI can modify the target service, but their
+confinement differs, and the difference is worth knowing:
+
+- **Claude Code** runs with `--restricted --strict-mcp-config` and an allowlist
+  of two tools (the browser and `Read`). It has no shell, and it sees no MCP
+  server other than vigil's.
+- **Codex** runs `codex exec --ignore-user-config -s read-only` with
+  `approval_policy="never"`, and vigil's browser tool pre-approved. Its own
+  read-only shell stays available, so it can read local files (including your
+  `~/.agents` skills) while it works. Writes and approvals are refused.
 
 ## One-time checks with ProofQA
 
@@ -285,6 +327,7 @@ Then:
 | `serve [--addr 127.0.0.1:8787]` | Standalone live web view for non-developers. QA submission stays disabled because no in-process scheduler owns the request; existing schedule controls remain available |
 | `loop --ui <addr>` | `loop` plus the live view and one-box, read-only QA submission. An available Browser Agent is required |
 | `request <file.yaml> [--queue] [--dry-run]` | Hand a manual QA request to the orchestrator: `feature_id`, `summary`, `entry_url`, `accounts` (named test accounts, no secrets), `instructions` (the flow in plain language), `mutation` (read-only / reversible / destructive), `locks`, `max_tool_calls`, `timeout_minutes`. The Browser Agent performs the flow with one isolated browser session per role (`"session":"teacher"`) and proposes scripts; `--queue` leaves it for a running loop |
+| `mcp-browser [--session <name>] [--timeout 45s] [--max-output 24000]` | Serve the bounded `agent_browser` tool over MCP stdio. Used by the CLI adapters, and usable directly from any MCP client (`{"command":"vigil","args":["mcp-browser"]}`): the same argv contract and the same refusal of `install`/`eval`/`connect`/`--profile` as the bundled pi extension |
 | `doctor [--install]` | Check config/targets, sqlite, evidence dir, repo/branch, Lightpanda binary + serve, Chromium, pi, API keys, extension, nono, agent, target HTTP, one asset marker line per environment (`asset marker <env>`) |
 
 `run` exits 1 when any scenario did not PASS and 2 on a usage error, an unknown `--env`, or a mutating scenario sent to a read-only environment. `doctor` exits 1 only on hard failures (sqlite, evidence dir, repo, target).

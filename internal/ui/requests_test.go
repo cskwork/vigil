@@ -1,15 +1,23 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"vigil/internal/attach"
 	"vigil/internal/config"
 	"vigil/internal/model"
 	"vigil/internal/store"
@@ -335,5 +343,98 @@ func TestRequestSiteSelectionKeepsLegacyContract(t *testing.T) {
 	}
 	if legacy.situation != "" {
 		t.Fatal("site must never be silently ignored")
+	}
+}
+
+type fakeAttachmentSubmitter struct {
+	situation   string
+	site        string
+	attachments []attach.Attachment
+	featureID   string
+	jobID       int64
+	err         error
+}
+
+func (f *fakeAttachmentSubmitter) SubmitUserRequest(ctx context.Context, situation string) (string, int64, error) {
+	return f.SubmitUserRequestWith(ctx, situation, "", nil)
+}
+
+func (f *fakeAttachmentSubmitter) SubmitUserRequestWith(_ context.Context, situation, site string, atts []attach.Attachment) (string, int64, error) {
+	f.situation, f.site, f.attachments = situation, site, atts
+	return f.featureID, f.jobID, f.err
+}
+
+func postUpload(s *Server, situation string, files map[string][]byte) *httptest.ResponseRecorder {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("situation", situation)
+	for name, data := range files {
+		part, _ := mw.CreateFormFile("files", name)
+		_, _ = part.Write(data)
+	}
+	_ = mw.Close()
+	r := httptest.NewRequest(http.MethodPost, "http://vigil.test/api/requests", &body)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	r.Header.Set("Origin", "http://vigil.test")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	return w
+}
+
+func testPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	img.Set(1, 1, color.White)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestRequestsAcceptsScreenshotWithoutProse(t *testing.T) {
+	fake := &fakeAttachmentSubmitter{featureID: "USER-2", jobID: 7}
+	s := newRequestServer(t, fake)
+	w := postUpload(s, "", map[string][]byte{"버그 화면.png": testPNG(t)})
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %q", w.Code, w.Body.String())
+	}
+	if len(fake.attachments) != 1 || fake.attachments[0].Kind != attach.KindImage {
+		t.Fatalf("attachments = %+v", fake.attachments)
+	}
+	if fake.attachments[0].Name != "버그 화면.png" {
+		t.Fatalf("name = %q", fake.attachments[0].Name)
+	}
+	// Stored under the evidence root so the dashboard can serve it back.
+	if !strings.HasPrefix(fake.attachments[0].Path, s.evRoot) {
+		t.Fatalf("path %q is outside %q", fake.attachments[0].Path, s.evRoot)
+	}
+	if _, err := os.Stat(fake.attachments[0].Path); err != nil {
+		t.Fatalf("file not stored: %v", err)
+	}
+}
+
+func TestRequestsRejectsUnsupportedUploadAndKeepsNothing(t *testing.T) {
+	fake := &fakeAttachmentSubmitter{featureID: "USER-3", jobID: 8}
+	s := newRequestServer(t, fake)
+	w := postUpload(s, "확인해 주세요", map[string][]byte{"notes.txt": []byte("just text")})
+
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, body = %q", w.Code, w.Body.String())
+	}
+	if fake.attachments != nil {
+		t.Fatalf("submitter was called with %+v", fake.attachments)
+	}
+	entries, err := os.ReadDir(filepath.Join(s.evRoot, "requests"))
+	if err == nil && len(entries) > 0 {
+		t.Fatalf("rejected upload left %d directories behind", len(entries))
+	}
+}
+
+func TestRequestsStillRejectsEmptySubmission(t *testing.T) {
+	w := postUpload(newRequestServer(t, &fakeAttachmentSubmitter{}), "   ", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %q", w.Code, w.Body.String())
 	}
 }

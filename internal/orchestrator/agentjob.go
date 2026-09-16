@@ -248,6 +248,7 @@ func (o *Orchestrator) buildRequest(ctx context.Context, task string, job *model
 	if p.Request != nil {
 		mr := p.Request
 		req.Instructions, req.EntryURL, req.Accounts, req.Mutation, req.Locks = mr.Instructions, mr.EntryURL, mr.Accounts, mr.Mutation, mr.Locks
+		req.Attachments = mr.Attachments
 		req.MaxToolCalls, req.TimeoutMinutes, req.MaxContinuations = mr.MaxToolCalls, mr.TimeoutMinutes, mr.MaxContinuations
 		if len(mr.Routes) > 0 {
 			req.Routes = mr.Routes
@@ -267,6 +268,13 @@ func (o *Orchestrator) buildRequest(ctx context.Context, task string, job *model
 		}
 		if mr.Instructions != "" {
 			evidenceParts = append(evidenceParts, "Manual QA request:\n"+mr.Instructions)
+		}
+		if len(mr.Attachments) > 0 {
+			names := make([]string, 0, len(mr.Attachments))
+			for _, a := range mr.Attachments {
+				names = append(names, fmt.Sprintf("%s (%s)", a.Name, a.Kind))
+			}
+			evidenceParts = append(evidenceParts, "Attached by the requester: "+strings.Join(names, ", "))
 		}
 	}
 	req.Evidence = strings.Join(evidenceParts, "\n\n")

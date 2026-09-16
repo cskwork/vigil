@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ko" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>LLM 설정 · Vigil</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<!-- 폰트는 첫 페인트를 막지 않게 불러옵니다. CDN에 닿지 못하면 theme.css의 시스템 한국어 폰트로 그려집니다. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"></noscript>
+<link rel="stylesheet" href="/ui/theme.css">
+</head>
+<body>
+<a class="skiplink" href="#main">본문으로 건너뛰기</a>
+<div class="shell">
+  <nav class="rail" aria-label="주 메뉴">
+    <div class="brand"><a class="brand-home" href="/" aria-label="Vigil 업무 개요"><svg viewBox="0 0 32 32" class="brand-mark" fill="none" aria-hidden="true"><path d="m6 7 10 19L26 7M11 7l5 10 5-10" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/></svg><b>vigil<span>검증 관리</span></b></a></div>
+    <div class="workspace-label"><span class="workspace-dot" aria-hidden="true"></span><span id="brandTarget">대상 불러오는 중</span></div>
+    <p class="nav-section">업무 공간</p>
+    <ul class="tree">
+      <li><a href="/"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>업무 개요</span><span class="cnt" id="nTodo"></span></a></li>
+      <li><a href="/results"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-3"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="m8 13 3 3 5-6"/></svg><span>검증 결과</span><span class="cnt" id="nBad"></span></a></li>
+      <li><a href="/scripts"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
+      <li class="nav-divider" aria-hidden="true"></li>
+      <li><a href="/activity"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/settings" class="active" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>LLM 설정</span></a></li>
+      <li><a href="/help"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
+    </ul>
+    <details class="rail-foot" id="railPrefs">
+      <summary>화면 설정</summary>
+      <label>화면 <select id="theme" aria-label="화면 모드"><option value="auto">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label>
+      <label>표시 밀도 <select id="density" aria-label="표시 밀도"><option value="comfortable">편안하게</option><option value="compact">촘촘하게</option></select></label>
+      <label><span>개발자 정보</span><input type="checkbox" id="devmode"></label>
+    </details>
+  </nav>
+  <div class="content">
+    <header class="topbar">
+      <div class="crumbs">Vigil 관리 콘솔 &rsaquo; <b>LLM 설정</b></div>
+      <div class="fresh"><span class="live" id="live" aria-hidden="true"></span><span id="freshText">연결 중</span></div>
+    </header>
+    <main id="main" tabindex="-1">
+      <div class="overview-heading"><div><h1>LLM 설정</h1><p>검증을 수행할 AI를 선택합니다. 관리자가 제공하는 설정을 쓰거나, 내 API 키나 내 코딩 에이전트 구독을 사용할 수 있습니다.</p></div></div>
+      <div id="fetchErr"></div>
+      <div class="runtime-note" id="activeNote" role="status">현재 설정을 불러오는 중입니다.</div>
+      <section class="panel"><header><h2>사용할 AI</h2></header>
+      <form id="settingsForm" class="admin-form">
+        <fieldset class="mode-choices">
+          <legend class="sr-only">AI 사용 방식</legend>
+          <label class="mode-choice"><input type="radio" name="mode" value="default" checked><span><b>관리자 기본 설정</b><small id="adminDefaultNote">관리자가 서버에 설정한 모델을 사용합니다.</small></span></label>
+          <label class="mode-choice"><input type="radio" name="mode" value="api_key"><span><b>내 API 키</b><small>Anthropic, GLM 코딩 플랜, OpenAI, 또는 OpenAI 호환 엔드포인트의 키를 직접 넣습니다.</small></span></label>
+          <label class="mode-choice"><input type="radio" name="mode" value="cli"><span><b>내 코딩 에이전트</b><small>이 컴퓨터에 로그인된 Claude Code, Codex, pi를 그대로 사용합니다. 키를 저장하지 않습니다.</small></span></label>
+        </fieldset>
+
+        <section id="apiKeySection" hidden>
+          <div class="form-grid">
+            <label>제공자<select id="provider"></select></label>
+            <label>모델<input id="model" maxlength="200" placeholder="예: claude-sonnet-5"></label>
+          </div>
+          <label id="baseURLField" hidden>엔드포인트 주소<input id="baseURL" type="url" maxlength="512" placeholder="https://gateway.example.com/v1"></label>
+          <label>API 키<input id="apiKey" type="password" maxlength="512" autocomplete="off" placeholder="키를 붙여넣으세요"></label>
+          <p class="form-note" id="providerNote"></p>
+          <details class="advanced"><summary>고급 설정 · 사고 수준</summary><label>사고 수준<select id="thinking"><option value="off">off</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high" selected>high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label></details>
+        </section>
+
+        <section id="cliSection" hidden>
+          <div id="cliChoices"></div>
+          <details class="advanced"><summary>고급 설정 · 모델 지정</summary><label>모델<input id="cliModel" maxlength="200" placeholder="비워 두면 해당 에이전트의 기본 모델을 사용합니다"></label></details>
+          <p class="form-note">브라우저 조작은 vigil이 제공하는 도구(<code>vigil mcp-browser</code>)로만 수행하며, 대상 서비스 코드는 수정하지 않습니다.</p>
+        </section>
+
+        <div class="form-actions">
+          <p class="form-note">저장하기 전에 연결을 확인합니다. API 키는 이 컴퓨터에만 저장되며 화면에 다시 표시되지 않습니다.</p>
+          <button type="button" class="btn" id="testBtn">연결 확인</button>
+          <button class="btn primary" id="saveBtn">설정 저장</button>
+        </div>
+        <p id="feedback" class="qa-feedback" role="status" aria-live="polite"></p>
+      </form>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/ui/app.js"></script>
+<script>
+let payload = null, busy = false;
+
+const mode = () => document.querySelector('input[name=mode]:checked').value;
+function syncSections() {
+  $('apiKeySection').hidden = mode() !== 'api_key';
+  $('cliSection').hidden = mode() !== 'cli';
+  const p = (payload?.providers || []).find((x) => x.id === $('provider').value);
+  $('baseURLField').hidden = !p?.needs_base_url;
+  $('providerNote').textContent = p ? p.note + (p.env_var ? ` (환경 변수 ${p.env_var}로 전달됩니다)` : '') : '';
+}
+
+function render(d) {
+  payload = d;
+  $('activeNote').textContent = `현재 적용: ${d.summary}`;
+  $('activeNote').classList.add('connected');
+  $('adminDefaultNote').textContent = d.admin_default
+    ? `관리자가 서버에 설정한 모델(${d.admin_default})을 사용합니다.`
+    : '관리자가 설정한 모델이 없습니다. 아래에서 직접 지정해 주세요.';
+  $('provider').innerHTML = d.providers.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+  $('cliChoices').innerHTML = d.clis.map((c) => `<label class="mode-choice${c.installed ? '' : ' disabled'}"><input type="radio" name="cli" value="${esc(c.id)}" ${c.installed ? '' : 'disabled'}><span><b>${esc(c.label)}</b><small>${c.installed ? esc(c.note) : '이 컴퓨터에서 찾지 못했습니다. 설치 후 새로고침하세요.'}</small></span></label>`).join('');
+  const a = d.active;
+  for (const el of document.querySelectorAll('input[name=mode]')) el.checked = el.value === (a.mode || 'default');
+  if (a.provider) $('provider').value = a.provider;
+  $('model').value = a.model || '';
+  $('baseURL').value = a.base_url || '';
+  $('thinking').value = a.thinking || 'high';
+  $('cliModel').value = a.cli_model || '';
+  for (const el of document.querySelectorAll('input[name=cli]')) el.checked = el.value === a.cli;
+  $('apiKey').placeholder = a.has_key ? `저장된 키 ${esc(a.key_hint || '')} · 바꿀 때만 입력하세요` : '키를 붙여넣으세요';
+  for (const el of document.querySelectorAll('input[name=mode]')) el.onchange = syncSections;
+  $('provider').onchange = () => {
+    const p = d.providers.find((x) => x.id === $('provider').value);
+    if (p && !$('model').value) $('model').value = p.default_model || '';
+    syncSections();
+  };
+  syncSections();
+  $('freshText').textContent = '불러옴';
+  $('live').classList.add('ok');
+}
+
+function body() {
+  const m = mode();
+  if (m === 'api_key') {
+    return { mode: m, provider: $('provider').value, model: $('model').value.trim(), base_url: $('baseURL').value.trim(), api_key: $('apiKey').value, thinking: $('thinking').value };
+  }
+  if (m === 'cli') {
+    const picked = document.querySelector('input[name=cli]:checked');
+    return { mode: m, cli: picked ? picked.value : '', cli_model: $('cliModel').value.trim() };
+  }
+  return { mode: 'default' };
+}
+
+async function submit(test) {
+  if (busy) return;
+  busy = true;
+  $('testBtn').disabled = $('saveBtn').disabled = true;
+  $('feedback').className = 'qa-feedback';
+  $('feedback').textContent = test ? '연결을 확인하는 중입니다. 최대 1분 정도 걸릴 수 있습니다.' : '연결을 확인하고 저장하는 중입니다.';
+  try {
+    const r = await fetch('/api/settings/agent' + (test ? '?test=1' : ''), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body()),
+    });
+    const result = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(result.error || `처리하지 못했습니다 (HTTP ${r.status})`);
+    $('feedback').className = 'qa-feedback success';
+    if (test) {
+      $('feedback').textContent = `연결을 확인했습니다: ${result.summary}`;
+    } else {
+      render(result);
+      $('apiKey').value = '';
+      $('feedback').textContent = '설정을 저장했습니다. 다음 검증 요청부터 적용됩니다.';
+    }
+  } catch (err) {
+    $('feedback').className = 'qa-feedback error';
+    $('feedback').textContent = err.message;
+  } finally {
+    busy = false;
+    $('testBtn').disabled = $('saveBtn').disabled = false;
+  }
+}
+
+$('testBtn').onclick = () => submit(true);
+$('settingsForm').onsubmit = (e) => { e.preventDefault(); submit(false); };
+
+fetch('/api/settings/agent').then(async (r) => {
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `설정을 불러오지 못했습니다 (HTTP ${r.status})`);
+  return r.json();
+}).then(render).catch((err) => {
+  $('fetchErr').innerHTML = `<div class="banner bad">${esc(err.message)}</div>`;
+  $('freshText').textContent = '연결 실패';
+});
+</script>
+</body>
+</html>

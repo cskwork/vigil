@@ -20,6 +20,7 @@ import (
 	"vigil/internal/model"
 	"vigil/internal/orchestrator"
 	"vigil/internal/scheduler"
+	"vigil/internal/settings"
 	"vigil/internal/store"
 	"vigil/internal/ui"
 )
@@ -79,6 +80,10 @@ func (a *app) cmdAdmin(ctx context.Context, args []string) error {
 		return e
 	}
 	root := filepath.Join(filepath.Dir(registryPath), "projects")
+	// One LLM setting serves every project in this console: it is the operator's
+	// own access, not a per-project property.
+	llm := settings.NewStore(filepath.Join(filepath.Dir(registryPath), "agent-settings.json"))
+	llmWork := filepath.Join(filepath.Dir(registryPath), "agent")
 	console, e := admin.New(registryPath, admin.Initial(a.cfg), func(p admin.Project) (admin.Runtime, error) {
 		cfg := admin.Config(a.cfg, p, root)
 		cfg.Browser.Chromium.Headless = *headless
@@ -100,7 +105,8 @@ func (a *app) cmdAdmin(ctx context.Context, args []string) error {
 		actions := &adminActions{StoreScriptActions: ui.StoreScriptActions{Svc: &approval.Service{Cfg: cfg, St: st}}, ctx: runCtx, sched: sched, progress: progress, stopIdle: func() { run.StopIdle(0) }, logError: func(e error) { a.log.Printf("admin run: %v", e) }}
 		server := ui.New(cfg, st, cfg.Abs(cfg.Evidence.Dir))
 		server.SetScriptActions(actions)
-		server.SetRequestSubmitter(&adminRequests{app: child, actions: actions, run: progressRunner{run: run, tracker: progress}})
+		server.SetRequestSubmitter(&adminRequests{app: child, actions: actions, run: progressRunner{run: run, tracker: progress}, llm: llm, llmWork: llmWork})
+		server.SetSettings(llm, llmWork)
 		server.SetOnDemandMode()
 		if *dev != "" {
 			server.SetDevDir(*dev)
