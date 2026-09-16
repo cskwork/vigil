@@ -47,6 +47,26 @@ type Sandbox struct {
 	Env []string
 }
 
+// GrantRead adds a read-only directory grant (uploaded attachments, extra
+// inputs). It is a no-op outside the sandbox or for a path that does not exist.
+func (s *Sandbox) GrantRead(dir string) {
+	if s == nil || s.Mode == SandboxNone || s.Mode == "" || dir == "" {
+		return
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return
+	}
+	for _, e := range s.Read {
+		if e == dir {
+			return
+		}
+	}
+	s.Read = append(s.Read, dir)
+	if rp, err := filepath.EvalSymlinks(dir); err == nil && rp != dir {
+		s.Read = append(s.Read, rp)
+	}
+}
+
 // Argv wraps program (argv[0] must be an absolute path or PATH-resolvable) with
 // the sandbox invocation. With Mode none it returns program unchanged.
 func (s *Sandbox) Argv(program ...string) []string {
@@ -234,6 +254,9 @@ func NewSandbox(cfg *config.Config, evidenceDir string) (*Sandbox, []string) {
 	// the extension file pi loads with -e (bundled piext/ or pi-agent-browser-native)
 	addBoth(&s.Read, filepath.Dir(ResolveExtension(cfg)))
 	addBoth(&s.Allow, filepath.Join(home, ".pi"))
+	if cr := cfg.Agent.Credential; cr != nil && cr.Extension != "" {
+		addBoth(&s.Read, filepath.Dir(cr.Extension))
+	}
 	// pi's agent dir may be a symlink farm (models.json → ~/pi-setup/...): grant the targets read-only.
 	if entries, err := os.ReadDir(filepath.Join(home, ".pi", "agent")); err == nil {
 		for _, e := range entries {

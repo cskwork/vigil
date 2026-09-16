@@ -25,6 +25,7 @@
       <li><a href="/scripts"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 5h13M8 12h13M8 19h13M3 5h1M3 12h1M3 19h1"/></svg><span>검사 관리</span><span class="cnt" id="nScripts"></span></a></li>
       <li class="nav-divider" aria-hidden="true"></li>
       <li><a href="/activity"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span>시스템 활동</span></a></li>
+      <li><a href="/settings"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>LLM 설정</span></a></li>
       <li><a href="/help" class="active" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/></svg><span>도움말</span></a></li>
     </ul>
     <details class="rail-foot" id="railPrefs">
@@ -186,6 +187,8 @@ $('tTask').innerHTML = [
   ['티켓 증상 재현하기', '없습니다. 터미널에서만 합니다.', 'vigil reproduce &lt;이슈 키&gt;'],
   ['발견 사항 닫기', '없습니다. 터미널에서만 합니다.', 'vigil findings resolve &lt;번호&gt;'],
   ['검사 반려하기', '검사 관리 화면에서 <b>✖ 반려</b>', 'vigil reject &lt;검사 이름&gt;'],
+  ['화면 이미지·영상으로 요청하기', '<a href="/#qaIntake">업무 개요</a>의 새 검증 요청에서 파일 첨부. 설명 없이 첨부만 올려도 됩니다', '없습니다. 화면에서만 합니다.'],
+  ['사용할 AI 바꾸기', '<a href="/settings">LLM 설정</a>에서 내 API 키나 내 코딩 에이전트 선택', '없습니다. 화면에서만 합니다.'],
 ].map(([what, ui, cli]) => `<tr><td class="t">${esc(what)}</td><td data-lab="화면에서">${ui}</td><td data-lab="터미널에서"><span class="mono">${cli}</span></td></tr>`).join('');
 
 // 단축키 표도 app.js 의 SHORTCUTS 를 그대로 읽어, 실제로 동작하는 키와 어긋날 수

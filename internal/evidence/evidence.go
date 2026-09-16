@@ -40,6 +40,13 @@ func (s *Store) RunsDir() string      { return filepath.Join(s.root, "runs") }
 func (s *Store) AgentRoot() string    { return filepath.Join(s.root, "agent") }
 func (s *Store) IncidentsDir() string { return filepath.Join(s.root, "incidents") }
 
+// RequestsDirName holds the screenshots and recordings uploaded with a QA
+// request. They are request evidence, so they age out with failure evidence.
+const RequestsDirName = "requests"
+
+// RequestsDir is <root>/requests.
+func (s *Store) RequestsDir() string { return filepath.Join(s.root, RequestsDirName) }
+
 // RunDir returns (and creates) <root>/runs/<scenario>/<UTC ts>-a<attempt>/.
 func (s *Store) RunDir(scenarioID string, at time.Time, attempt int) (string, error) {
 	if scenarioID == "" {
@@ -394,6 +401,16 @@ func (s *Store) Prune(passDays, failDays int) error {
 		}
 		if left, _ := os.ReadDir(fDir); len(left) == 0 {
 			_ = os.Remove(fDir)
+		}
+	}
+	uploads, _ := os.ReadDir(s.RequestsDir())
+	for _, u := range uploads {
+		if !u.IsDir() {
+			continue
+		}
+		dir := filepath.Join(s.RequestsDir(), u.Name())
+		if failDays > 0 && now.Sub(dirTime(dir, u.Name())) > time.Duration(failDays)*24*time.Hour {
+			keep(os.RemoveAll(dir))
 		}
 	}
 	return firstErr

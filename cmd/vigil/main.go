@@ -53,6 +53,7 @@ func usage() {
 usage: vigil [-c vigil.yaml] [--json] <command> [flags]
 
   init                    write a starter vigil.yaml + url.md (only if missing)
+  mcp-browser             serve the bounded browser tool over MCP stdio (for claude/codex)
   add [project]           register the project and import scenarios/ + flows/ from disk
   import --history        ingest the last N historical features (no gate/plan)
   scan                    import files, ingest new features once, deployment gate, orchestrate
@@ -144,6 +145,8 @@ func (a *app) run(ctx context.Context, cmd string, args []string) (int, error) {
 		return 0, a.cmdProof(ctx, args)
 	case "init":
 		return 0, a.cmdInit()
+	case "mcp-browser":
+		return 0, a.cmdMCPBrowser(ctx, args)
 	}
 	if err := a.open(); err != nil {
 		return 1, err
@@ -266,7 +269,7 @@ func (a *app) buildRunner() *runner.Runner {
 
 // buildAgent returns nil (and warns) when the provider is unavailable (PRD rule 12).
 func (a *app) buildAgent() agent.Adapter {
-	ag, err := agent.NewPi(a.cfg)
+	ag, err := agent.New(a.cfg)
 	if err != nil {
 		a.log.Printf("warn: Browser Agent unavailable, continuing with deterministic QA only: %v", err)
 		return nil

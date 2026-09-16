@@ -52,9 +52,9 @@ func NewPi(cfg *config.Config) (Adapter, error) {
 	if cfg == nil {
 		return nil, errors.New("agent: nil config")
 	}
-	piPath, err := exec.LookPath("pi")
+	piPath, err := lookPi()
 	if err != nil {
-		return nil, fmt.Errorf("agent: `pi` not found on PATH (install: npm i -g @earendil-works/pi-coding-agent): %w", err)
+		return nil, err
 	}
 	chain, err := NewChainFromConfig(cfg)
 	if err != nil {
@@ -140,10 +140,18 @@ func (p *pi) Doctor(ctx context.Context) error {
 	if _, err := exec.LookPath("agent-browser"); err != nil {
 		problems = append(problems, "agent-browser CLI missing: npm i -g agent-browser && agent-browser install")
 	}
+	// Check the environment the agent actually runs with: an operator key
+	// configured in the console fills the provider variable even when the
+	// server's own environment does not.
+	effective := p.env("", "")
 	for k, v := range p.cfg.Agent.EnvMap {
-		if os.Getenv(v) == "" && os.Getenv(k) == "" {
-			problems = append(problems, fmt.Sprintf("env %s (mapped from %s) is empty: export %s=<api key>", k, v, v))
+		if envValue(effective, k) != "" {
+			continue
 		}
+		problems = append(problems, fmt.Sprintf("env %s (mapped from %s) is empty: export %s=<api key>, or set a key in the console's LLM settings", k, v, v))
+	}
+	if cr := p.cfg.Agent.Credential; cr != nil && cr.EnvVar != "" && cr.APIKey == "" {
+		problems = append(problems, fmt.Sprintf("the configured provider has no API key (%s is empty)", cr.EnvVar))
 	}
 	// Model catalog check: `pi --list-models <model>` lists only providers whose key is present.
 	// One missing chain entry is a warning (the chain skips it); no listed entry is a problem.
@@ -335,6 +343,14 @@ func (p *pi) Run(ctx context.Context, req Request, evidenceDir string) (*Result,
 	for _, w := range warns {
 		p.logger.Printf("WARN %s", w)
 	}
+	// Uploaded evidence lives outside the job's evidence dir; the sandboxed
+	// process must still be able to read it.
+	for _, a := range req.Attachments {
+		sb.GrantRead(filepath.Dir(a.Path))
+		for _, f := range a.Frames {
+			sb.GrantRead(filepath.Dir(f))
+		}
+	}
 	session := sessionName(req.FeatureID, start)
 	env := append(p.env(session, evidenceDir), sb.Env...)
 	sessionDir := filepath.Join(evidenceDir, "pi-session")
@@ -370,7 +386,7 @@ func (p *pi) Run(ctx context.Context, req Request, evidenceDir string) (*Result,
 				return nil, ctx.Err()
 			}
 		}
-		argv := sb.Argv(p.piArgvSession(entry, sys, task, sessionDir, sessionID)...)
+		argv := sb.Argv(p.piArgvSession(entry, sys, task, sessionDir, sessionID, req.AttachedImages())...)
 		if b, err := json.MarshalIndent(argv, "", "  "); err == nil {
 			_ = os.WriteFile(filepath.Join(evidenceDir, FileArgv), b, 0o644)
 		}
@@ -560,36 +576,66 @@ func (p *pi) closeBrowserSessions(base, transcriptPath string) {
 	}
 }
 
-func (p *pi) writeResult(dir string, res *Result) {
-	red := p.redactor.RedactResult(res)
-	if b, err := yaml.Marshal(red); err == nil {
+func (p *pi) writeResult(dir string, res *Result) { writeResultFiles(dir, p.redactor, res) }
+
+// writeResultFiles stores the redacted result as YAML and JSON next to the transcript.
+func writeResultFiles(dir string, red *Redactor, res *Result) {
+	r := red.RedactResult(res)
+	if b, err := yaml.Marshal(r); err == nil {
 		_ = os.WriteFile(filepath.Join(dir, FileResult), b, 0o644)
 	}
-	if b, err := json.MarshalIndent(red, "", "  "); err == nil {
+	if b, err := json.MarshalIndent(r, "", "  "); err == nil {
 		_ = os.WriteFile(filepath.Join(dir, FileResultJSON), b, 0o644)
 	}
 }
 
+// closeBrowserSession closes one agent-browser session so a headless browser
+// does not linger after a task ends.
+func closeBrowserSession(name string) {
+	bin, err := exec.LookPath("agent-browser")
+	if err != nil || name == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "close")
+	cmd.Env = append(os.Environ(), "AGENT_BROWSER_SESSION="+name)
+	_ = cmd.Run()
+}
+
 // piArgv is the exact pi invocation (no sandbox wrapper) for one chain entry.
 func (p *pi) piArgv(entry ModelEntry, systemPrompt, task string) []string {
-	return p.piArgvSession(entry, systemPrompt, task, "", "")
+	return p.piArgvSession(entry, systemPrompt, task, "", "", nil)
 }
 
 // piArgvSession persists the conversation under sessionDir/sessionID so a
 // timed-out task can be resumed once with a WRAP UP message (see wrapUpArgv).
-func (p *pi) piArgvSession(entry ModelEntry, systemPrompt, task, sessionDir, sessionID string) []string {
+// images are handed to pi as `@path` so the model sees the uploaded screens
+// themselves, not only their paths.
+func (p *pi) piArgvSession(entry ModelEntry, systemPrompt, task, sessionDir, sessionID string, images []string) []string {
 	argv := []string{p.piPath, "-p", "--mode", "json"}
 	if sessionDir != "" && sessionID != "" {
 		argv = append(argv, "--session-dir", sessionDir, "--session-id", sessionID)
 	} else {
 		argv = append(argv, "--no-session")
 	}
-	return append(argv,
+	argv = append(argv,
 		"--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--approve",
-		"-e", p.extension, "--tools", p.tools,
+		"-e", p.extension)
+	// A personal OpenAI-compatible endpoint is registered by a generated
+	// extension instead of editing the operator's ~/.pi/agent/models.json.
+	if cr := p.cfg.Agent.Credential; cr != nil && cr.Extension != "" {
+		argv = append(argv, "-e", cr.Extension)
+	}
+	argv = append(argv,
+		"--tools", p.tools,
 		"--provider", entry.Provider, "--model", entry.Model, "--thinking", entry.Thinking,
 		"--system-prompt", systemPrompt,
-		"--", task)
+		"--")
+	for _, img := range images {
+		argv = append(argv, "@"+img)
+	}
+	return append(argv, task)
 }
 
 // WrapUpMessage is sent when the main run hit the timeout or tool budget: the
@@ -602,7 +648,7 @@ const ContinueMessage = "CONTINUE: your tool budget has been renewed. Resume the
 // continueArgv resumes the persisted session with tools enabled (same extension) and a fresh budget.
 func (p *pi) continueArgv(entry ModelEntry, systemPrompt, sessionDir, sessionID string, budget int) []string {
 	msg := ContinueMessage + fmt.Sprintf(" You have %d more tool calls.", budget)
-	return p.piArgvSession(entry, systemPrompt, msg, sessionDir, sessionID)
+	return p.piArgvSession(entry, systemPrompt, msg, sessionDir, sessionID, nil)
 }
 
 // CompileMessage asks for prose candidates to be rewritten as vigil DSL documents.
@@ -638,6 +684,26 @@ func needsCompile(res *Result) bool {
 	return false
 }
 
+// compileRequest is CompileMessage plus the exact fault of each rejected
+// candidate. A model that is told "line 33: mapping values are not allowed"
+// fixes the quoting it got wrong; a generic instruction usually reproduces it.
+func compileRequest(candidates []string) string {
+	var b strings.Builder
+	b.WriteString(CompileMessage)
+	var faults []string
+	for i, c := range candidates {
+		if _, err := dsl.Parse([]byte(c)); err != nil {
+			faults = append(faults, fmt.Sprintf("candidate %d: %s", i+1, firstLine(err.Error())))
+		}
+	}
+	if len(faults) > 0 {
+		b.WriteString("\n\nThese are the exact errors your candidates produced. Fix them, keep every step, assertion and oracle field unchanged, and re-emit EVERY candidate (the valid ones too):\n- ")
+		b.WriteString(strings.Join(faults, "\n- "))
+		b.WriteString("\nMost of these are quoting: a value that contains a colon, a quote or # must be one double-quoted string with the inner quotes escaped.\n")
+	}
+	return b.String()
+}
+
 // compileCandidates makes one cheap tool-less call to turn prose candidates into DSL;
 // on success the candidates are replaced and res.Compiled is set. Failure leaves res as is.
 func (p *pi) compileCandidates(ctx context.Context, sb *Sandbox, env []string, evidenceDir, transcriptPath string, attempt int, entry ModelEntry, sessionDir, sessionID string, res *Result) {
@@ -646,7 +712,7 @@ func (p *pi) compileCandidates(ctx context.Context, sb *Sandbox, env []string, e
 		"--session-dir", sessionDir, "--session-id", sessionID,
 		"--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--approve", "--no-tools",
 		"--provider", entry.Provider, "--model", entry.Model, "--thinking", "low",
-		"--", CompileMessage}
+		"--", compileRequest(res.ScriptCandidates)}
 	ctr, _, _, _, err := p.runOnce(ctx, sb.Argv(argv...), env, evidenceDir, transcriptPath, attempt, 4*time.Minute, 0)
 	if err != nil || ctr == nil {
 		return
@@ -655,11 +721,18 @@ func (p *pi) compileCandidates(ctx context.Context, sb *Sandbox, env []string, e
 	if perr != nil || len(r2.ScriptCandidates) == 0 {
 		return
 	}
+	// Keep every candidate that parses, from the compiled answer first and then
+	// from the original: a compile pass that forgets one must not delete a
+	// candidate that was already valid.
 	var ok []string
-	for _, c := range r2.ScriptCandidates {
-		if _, err := dsl.Parse([]byte(c)); err == nil {
-			ok = append(ok, c)
+	seen := map[string]bool{}
+	for _, c := range append(append([]string{}, r2.ScriptCandidates...), res.ScriptCandidates...) {
+		sc, err := dsl.Parse([]byte(c))
+		if err != nil || seen[sc.Scenario.ID] {
+			continue
 		}
+		seen[sc.Scenario.ID] = true
+		ok = append(ok, c)
 	}
 	if len(ok) == 0 {
 		return
@@ -705,6 +778,13 @@ func agentEnv(cfg *config.Config, session, evidenceDir string) []string {
 			env = append(env, k+"="+v)
 		}
 	}
+	// The operator's own key and catalog win over the server's environment.
+	if cr := cfg.Agent.Credential; cr != nil {
+		if cr.EnvVar != "" && cr.APIKey != "" {
+			env = append(env, cr.EnvVar+"="+cr.APIKey)
+		}
+
+	}
 	env = append(env, "PI_OFFLINE=1") // no startup update checks; API calls are unaffected
 	if session != "" {
 		env = append(env,
@@ -714,6 +794,17 @@ func agentEnv(cfg *config.Config, session, evidenceDir string) []string {
 		)
 	}
 	return env
+}
+
+// envValue reads one variable out of a prepared environment slice.
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return kv[len(prefix):]
+		}
+	}
+	return ""
 }
 
 var sessionSafeRe = regexp.MustCompile(`[^a-z0-9-]+`)

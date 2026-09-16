@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"vigil/internal/agent"
+	"vigil/internal/attach"
 	"vigil/internal/model"
 	"vigil/internal/store"
 )
@@ -41,6 +42,7 @@ type ManualRequest struct {
 	Routes           []string
 	Accounts         []string
 	Instructions     string
+	Attachments      []attach.Attachment
 	Mutation         string
 	Locks            []string
 	MaxToolCalls     int
@@ -59,8 +61,16 @@ type ManualRequestResult struct {
 // A plain string is deliberately the entire browser-facing write contract: callers
 // cannot grant URLs, accounts, mutation, or execution-budget overrides.
 func (o *Orchestrator) SubmitUserRequest(ctx context.Context, instructions string) (string, int64, error) {
+	return o.SubmitUserRequestWith(ctx, instructions, nil)
+}
+
+// SubmitUserRequestWith is SubmitUserRequest plus the screenshots and recording
+// frames the requester uploaded. Attachments alone are a complete request: the
+// agent reads them and derives the most likely scenario.
+func (o *Orchestrator) SubmitUserRequestWith(ctx context.Context, instructions string, attachments []attach.Attachment) (string, int64, error) {
 	result, err := o.RegisterManualRequest(ctx, ManualRequest{
 		Instructions:     instructions,
+		Attachments:      attachments,
 		Mutation:         string(model.MutationReadOnly),
 		MaxToolCalls:     o.cfg.Agent.MaxTurns,
 		TimeoutMinutes:   int(o.cfg.Agent.Timeout.Duration / time.Minute),
@@ -79,8 +89,8 @@ func (o *Orchestrator) NormalizeManualRequest(in ManualRequest) (ManualRequest, 
 	in.EntryURL = strings.TrimSpace(in.EntryURL)
 	in.Instructions = strings.TrimSpace(in.Instructions)
 	in.Mutation = strings.TrimSpace(in.Mutation)
-	if in.Instructions == "" {
-		return in, invalidManualRequest(errors.New("manual request instructions are required"))
+	if in.Instructions == "" && len(in.Attachments) == 0 {
+		return in, invalidManualRequest(errors.New("manual request needs instructions or an attachment"))
 	}
 	if !utf8.ValidString(in.Instructions) {
 		return in, invalidManualRequest(errors.New("manual request instructions must be valid UTF-8"))
@@ -134,10 +144,13 @@ func (o *Orchestrator) RegisterManualRequest(ctx context.Context, in ManualReque
 	if in.Summary == "" {
 		in.Summary = firstLine(in.Instructions)
 	}
+	if in.Summary == "" {
+		in.Summary = attachmentSummary(in.Attachments)
+	}
 	ev := model.FeatureEvent{FeatureID: in.FeatureID, Status: "requested", ShippedSHA: sha, ShippedAt: now, Routes: in.Routes, Summary: in.Summary, Source: "manual"}
 	req := &agent.Request{
 		Summary: in.Summary, EntryURL: in.EntryURL, Routes: in.Routes, Accounts: in.Accounts,
-		Instructions: in.Instructions, Mutation: in.Mutation, Locks: in.Locks,
+		Instructions: in.Instructions, Attachments: in.Attachments, Mutation: in.Mutation, Locks: in.Locks,
 		MaxToolCalls: in.MaxToolCalls, TimeoutMinutes: in.TimeoutMinutes, MaxContinuations: in.MaxContinuations,
 	}
 	payload := jobPayload{FeatureID: in.FeatureID, ShippedSHA: sha, Request: req}.String()
@@ -165,6 +178,27 @@ func (o *Orchestrator) uniqueManualFeatureID(ctx context.Context) (string, error
 		}
 	}
 	return "", errors.New("could not allocate a unique manual request id")
+}
+
+// attachmentSummary titles a request that arrived with no prose at all.
+func attachmentSummary(list []attach.Attachment) string {
+	images, videos := 0, 0
+	for _, a := range list {
+		if a.Kind == attach.KindVideo {
+			videos++
+		} else {
+			images++
+		}
+	}
+	switch {
+	case images > 0 && videos > 0:
+		return fmt.Sprintf("첨부 자료로 접수한 요청 (이미지 %d개, 영상 %d개)", images, videos)
+	case videos > 0:
+		return fmt.Sprintf("첨부 영상으로 접수한 요청 (%d개)", videos)
+	case images > 0:
+		return fmt.Sprintf("첨부 이미지로 접수한 요청 (%d개)", images)
+	}
+	return ""
 }
 
 func randomToken(n int) (string, error) {

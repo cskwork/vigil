@@ -212,7 +212,7 @@ func (a *app) cmdDoctor(ctx context.Context, args []string) (int, error) {
 	} else {
 		d.warn("nono sandbox", fmt.Sprintf("mode=%s (agent.sandbox=%s, nono not on PATH → agent runs unsandboxed)", mode, cfg.Agent.Sandbox))
 	}
-	if ag, err := agent.NewPi(cfg); err != nil {
+	if ag, err := agent.New(cfg); err != nil {
 		d.warn("agent", err.Error())
 	} else {
 		actx, cancel := context.WithTimeout(ctx, 60*time.Second)

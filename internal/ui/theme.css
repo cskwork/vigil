@@ -113,6 +113,23 @@ section { scroll-margin-top:80px; }
 .qa-feedback.success { color:var(--ok); }
 .qa-feedback.warning { color:var(--warn); }
 .qa-feedback.error { color:var(--bad); }
+.mode-choices { border:0; margin:0 0 18px; padding:0; display:grid; gap:10px; }
+/* .admin-form label is a column with full-width inputs; a choice row is neither. */
+.admin-form .mode-choice, .mode-choice { display:flex; flex-direction:row; gap:12px; align-items:flex-start; border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; background:var(--surface); cursor:pointer; font-weight:400; }
+.admin-form .mode-choice input[type=radio], .mode-choice input[type=radio] { width:auto; min-width:0; flex:0 0 auto; margin:3px 0 0; }
+.mode-choice:has(input:checked) { border-color:var(--accent,var(--control-line)); box-shadow:var(--shadow); }
+.mode-choice.disabled { opacity:.55; cursor:not-allowed; }
+.mode-choice span { display:block; }
+.mode-choice b { display:block; }
+.mode-choice small { display:block; color:var(--muted); margin-top:2px; }
+#cliChoices { display:grid; gap:10px; margin-bottom:12px; }
+.qa-attach-label { display:block; margin:14px 0 6px; font-weight:650; }
+.qa-attach-label .sub { font-weight:400; }
+.qa-form input[type=file] { display:block; width:100%; border:1px dashed var(--control-line); border-radius:var(--radius); padding:10px 12px; background:var(--surface); font:inherit; color:var(--muted); }
+.qa-form input[type=file]::file-selector-button { margin-right:10px; border:1px solid var(--control-line); border-radius:calc(var(--radius) - 2px); padding:6px 12px; background:var(--surface-2,var(--surface)); color:inherit; font:inherit; cursor:pointer; }
+#qaFilesNote { margin:6px 0 0; }
+.qa-attach-list { list-style:none; margin:8px 0 0; padding:0; display:flex; flex-wrap:wrap; gap:8px; }
+.qa-attach-list li { border:1px solid var(--line); border-radius:999px; padding:4px 12px; font-size:var(--fs-sm); background:var(--surface); }
 
 /* KPI row */
 .kpis { display:grid; grid-template-columns:1.6fr repeat(4,1fr); gap:14px; }

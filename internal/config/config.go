@@ -197,6 +197,13 @@ type Config struct {
 		// DomainFile: optional markdown of domain rules (relative to the config dir)
 		// injected into every agent task prompt, bounded to 12 KB.
 		DomainFile string `yaml:"domain_file"`
+		// CLIModel is the model a coding-agent CLI adapter (provider claude or
+		// codex) should use; empty means the CLI's own default.
+		CLIModel string `yaml:"cli_model"`
+		// Credential is the console operator's own model access. It never comes
+		// from YAML: the console injects it per run and it replaces the model
+		// chain and the provider key for that run.
+		Credential *AgentCredential `yaml:"-"`
 	} `yaml:"agent"`
 
 	Personas map[string]Persona `yaml:"personas"`
@@ -889,6 +896,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("agent.models[%d]: %w", i, err)
 		}
 	}
+	switch c.Agent.Provider {
+	case "", "pi", "claude", "codex":
+	default:
+		return fmt.Errorf("agent.provider %q is not supported (expected pi, claude or codex)", c.Agent.Provider)
+	}
 	if c.Agent.ModelCooldown.Duration <= 0 {
 		return fmt.Errorf("agent.model_cooldown must be positive (got %s)", c.Agent.ModelCooldown.Duration)
 	}
@@ -1005,9 +1017,38 @@ func SplitModelEntry(entry string) (provider, model, thinking string, err error)
 	return e[:i], e[i+1:], thinking, nil
 }
 
-// ModelEntries is the effective ordered chain: agent.models when set, else the
-// single legacy agent.model (its thinking comes from agent.thinking).
+// AgentCredential is one operator-supplied model access, resolved by the console
+// from its settings file. Extension is a generated pi extension that registers a
+// custom OpenAI-compatible provider, so a personal endpoint never edits the
+// user's own ~/.pi/agent/models.json.
+type AgentCredential struct {
+	Provider  string
+	Model     string
+	Thinking  string
+	EnvVar    string
+	APIKey    string
+	Extension string
+}
+
+// Entry renders the credential as one model chain entry.
+func (a *AgentCredential) Entry() string {
+	if a == nil || a.Provider == "" || a.Model == "" {
+		return ""
+	}
+	e := a.Provider + "/" + a.Model
+	if a.Thinking != "" {
+		e += ":" + a.Thinking
+	}
+	return e
+}
+
+// ModelEntries is the effective ordered chain: the operator's credential when
+// set, else agent.models, else the single legacy agent.model (its thinking comes
+// from agent.thinking).
 func (c *Config) ModelEntries() []string {
+	if e := c.Agent.Credential.Entry(); e != "" {
+		return []string{e}
+	}
 	if len(c.Agent.Models) > 0 {
 		return append([]string(nil), c.Agent.Models...)
 	}

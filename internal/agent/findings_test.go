@@ -3,6 +3,8 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"vigil/internal/dsl"
 )
 
 func TestParseResultFindingsNormalised(t *testing.T) {
@@ -90,6 +92,60 @@ func TestSystemPromptTeachesBoundAssertions(t *testing.T) {
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("system prompt missing %q", want)
+		}
+	}
+}
+
+// The candidate below is the shape a real GLM run produced: an unquoted
+// oracle.note that contains a Korean label ("검색어: 주간보고"). YAML reads the
+// inner colon as a mapping, so the whole candidate is thrown away.
+const brokenNoteCandidate = `scenario:
+  id: memo-search
+  version: 1
+  title: 메모 검색
+covers:
+  feature: user-qa-1
+  routes: [/]
+steps:
+  - goto: /
+  - assert_text: { value: "검색 결과" }
+assert:
+  no_uncaught_console_error: true
+oracle:
+  source: observation
+  source_feature: user-qa-1
+  note: 첨부 화면은 검색어: 주간보고와 결과 3건을 보여 준다
+`
+
+func TestCompileRequestNamesTheExactFault(t *testing.T) {
+	msg := compileRequest([]string{brokenNoteCandidate})
+	if !strings.Contains(msg, "candidate 1:") {
+		t.Fatalf("compile request does not name the candidate:\n%s", msg)
+	}
+	if !strings.Contains(msg, "mapping values") {
+		t.Fatalf("compile request does not carry the parser error:\n%s", msg)
+	}
+	if !strings.Contains(msg, "re-emit EVERY candidate") {
+		t.Fatalf("compile request does not ask for every candidate back:\n%s", msg)
+	}
+}
+
+func TestCompileRequestWithoutFaultsIsThePlainMessage(t *testing.T) {
+	good := strings.Replace(brokenNoteCandidate, "note: 첨부 화면은 검색어: 주간보고와 결과 3건을 보여 준다",
+		`note: "첨부 화면은 검색어: 주간보고와 결과 3건을 보여 준다"`, 1)
+	if _, err := dsl.Parse([]byte(good)); err != nil {
+		t.Fatalf("quoted note still does not parse: %v", err)
+	}
+	if msg := compileRequest([]string{good}); msg != CompileMessage {
+		t.Fatalf("a parseable candidate must not add faults:\n%s", msg)
+	}
+}
+
+func TestSystemPromptTeachesTheQuotingRule(t *testing.T) {
+	p := SystemPrompt()
+	for _, want := range []string{"YAML quoting", "oracle.note", "검색어: 주간보고"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("system prompt is missing %q", want)
 		}
 	}
 }
