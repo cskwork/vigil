@@ -469,6 +469,53 @@ func TestAppFailureIncidentDedupeAndResolve(t *testing.T) {
 	}
 }
 
+// Any run that reaches the target closes the ENVIRONMENT incident; a failing
+// assertion still counts, because the environment answered.
+func TestEnvironmentIncidentResolvesWhenARunReachesTheTarget(t *testing.T) {
+	o, st, _, _, cfg := newTest(t)
+	ctx := context.Background()
+	seed(t, o, cfg, seedScenario)
+	job := plainJob("visible-remedy-order")
+	if err := o.AfterRun(ctx, job, runFor(t, st, job, job.ScenarioID, model.OutcomeEnvFailure), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.OpenIncidentFor(ctx, "p", model.IncidentEnvironment, ""); err != nil {
+		t.Fatalf("no environment incident: %v", err)
+	}
+	if err := o.AfterRun(ctx, job, runFor(t, st, job, job.ScenarioID, model.OutcomeAppFailure), nil); err != nil {
+		t.Fatal(err)
+	}
+	open, _ := st.ListIncidents(ctx, "p", true, 10)
+	if len(open) != 1 || open[0].Kind != model.IncidentAppRegression {
+		t.Fatalf("want only the regression open, got %+v", open)
+	}
+}
+
+// A script rejected while its run was in flight gets no incident and no retry:
+// it has no Run button, so the incident could never be re-checked.
+func TestAfterRunOnRejectedScriptOnlyRecords(t *testing.T) {
+	o, st, _, _, cfg := newTest(t)
+	ctx := context.Background()
+	seed(t, o, cfg, seedScenario)
+	job := plainJob("visible-remedy-order")
+	run := runFor(t, st, job, job.ScenarioID, model.OutcomeAppFailure)
+	if err := st.SetScenarioState(ctx, "p", job.ScenarioID, model.StateRejected); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.AfterRun(ctx, job, run, nil); err != nil {
+		t.Fatal(err)
+	}
+	if open, _ := st.ListIncidents(ctx, "p", true, 10); len(open) != 0 {
+		t.Fatalf("incident opened on a rejected script: %+v", open)
+	}
+	if jobs := jobsOfKind(t, st, model.JobRunScenario); len(jobs) != 0 {
+		t.Fatalf("retry queued for a rejected script: %+v", jobs)
+	}
+	if sc, _ := st.GetScenario(ctx, "p", job.ScenarioID); sc.State != model.StateRejected || sc.LastOutcome != model.OutcomeAppFailure {
+		t.Fatalf("rejected script changed or outcome lost: %+v", sc)
+	}
+}
+
 func TestFlakeQuarantine(t *testing.T) {
 	o, st, _, _, cfg := newTest(t)
 	ctx := context.Background()
