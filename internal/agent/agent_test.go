@@ -421,6 +421,9 @@ func TestParseResultReproductionBlock(t *testing.T) {
 }
 
 func TestAgentEnvPrefersTheOperatorCredential(t *testing.T) {
+	// The server also exports the key; the console key must replace it, not
+	// sit behind it as a duplicate.
+	t.Setenv("Z_AI_API_KEY", "server-key")
 	cfg := &config.Config{}
 	cfg.Agent.EnvMap = map[string]string{"ZAI_API_KEY": "Z_AI_API_KEY"}
 	cfg.Agent.Credential = &config.AgentCredential{
@@ -429,6 +432,15 @@ func TestAgentEnvPrefersTheOperatorCredential(t *testing.T) {
 	env := agentEnv(cfg, "", "")
 	if got := envValue(env, "ZAI_API_KEY"); got != "console-key" {
 		t.Fatalf("ZAI_API_KEY = %q, want the console key", got)
+	}
+	n := 0
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "ZAI_API_KEY=") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("ZAI_API_KEY appears %d times; exec and envValue would disagree", n)
 	}
 	// Doctor reads this same environment, so a console key satisfies env_map
 	// even when the server has no exported key.
