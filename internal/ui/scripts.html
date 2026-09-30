@@ -182,7 +182,7 @@ function render() {
   $('chipDesc').textContent = chipFor(chip).desc((data && data.daily_at) || '09:00');
   // The action column only exists when something in view can be acted on, so no
   // row shows an empty control.
-  const acts = rows.some(s => ACTIONABLE.includes(s.state));
+  const acts = rows.some(hasActions);
   const cols = acts ? 4 : 3;
   $('head').innerHTML = `<tr><th scope="col">스크립트</th><th scope="col" class="fit">상태</th>${sortTh(sort, 'last', '최근 결과', 'fit')}${acts ? '<th scope="col" class="fit">할 수 있는 일</th>' : ''}</tr>`;
   bindSort($('head'), () => sort, setSort);
@@ -209,6 +209,11 @@ function render() {
 function focusAction(id) { const b = document.querySelector(`button[data-act^="run|${CSS.escape(id)}"]`) || document.querySelector(`button[data-open="${CSS.escape(id)}"]`); if (b) b.focus(); }
 
 const ACTIONABLE = ['PENDING_APPROVAL', 'NEEDS_REVIEW'];
+// admin(on_demand)에는 스케줄러가 없어 승인된 검사도 실행 버튼으로만 돕니다.
+// 쓰지 않음 칩의 검사는 실행 대상이 아닙니다.
+const NOT_RUNNABLE = CHIPS.find(c => c.key === 'EXCLUDED').states;
+const canRunOnDemand = (s) => !!(data && data.on_demand) && !NOT_RUNNABLE.includes(s.state);
+const hasActions = (s) => ACTIONABLE.includes(s.state) || canRunOnDemand(s);
 
 // The "다음에 일어나는 일" line is only worth a row's height where the reader
 // waits for something or has to act. For 정식 검사 the same sentence stands once
@@ -219,7 +224,7 @@ function rowHTML(s, acts) {
   const sel = selected === s.id;
   const last = s.last_outcome ? `${stTip(OUTCOME, s.last_outcome)}<div class="sub">${s.last_run_at ? esc(ago(s.last_run_at)) : ''}</div>` : '<span class="sub">실행 기록 없음</span>';
   const next = NEXT_ON_ROW.includes(s.state) ? `<div class="sub next">${esc(nextStep(s, data.daily_at, data.on_demand))}</div>` : '';
-  const cell = acts ? `<td class="fit actcell">${ACTIONABLE.includes(s.state) ? actionCell(s) : ''}</td>` : '';
+  const cell = acts ? `<td class="fit actcell">${hasActions(s) ? actionCell(s) : ''}</td>` : '';
   return `<tr class="${sel ? 'sel' : ''}">
     <td class="title"><button class="linklike" data-open="${esc(s.id)}" aria-pressed="${sel}">${esc(s.title || s.id)}</button>
       <div class="sub">${sourceChip(s)} ${esc(CLASS[s.class] || s.class)} · 판정 근거 ${tip(ORACLE[s.oracle] || s.oracle || '없음', GLOSS[s.oracle] || '무엇이 옳은 동작인지 정한 근거가 없습니다.')} ${dev(s.id)}</div>
@@ -232,11 +237,12 @@ function rowHTML(s, acts) {
 
 function actionCell(s) {
   const a = (data && data.actions) || {};
+  const decide = ACTIONABLE.includes(s.state);
   return `<div class="rowacts">
     <button class="btn" data-act="run|${esc(s.id)}" aria-expanded="${!!(popover && popover.id === s.id && popover.kind === 'run')}" ${a.run ? '' : 'disabled title="이 화면에는 실행기가 붙어 있지 않습니다. vigil loop --ui로 실행하세요"'}><span aria-hidden="true">▶</span> 실행</button>
-    <button class="btn primary" data-act="approve|${esc(s.id)}" aria-expanded="${!!(popover && popover.id === s.id && popover.kind === 'approve')}" ${a.approve ? '' : 'disabled'}><span aria-hidden="true">✔</span> 승인</button>
+    ${decide ? `<button class="btn primary" data-act="approve|${esc(s.id)}" aria-expanded="${!!(popover && popover.id === s.id && popover.kind === 'approve')}" ${a.approve ? '' : 'disabled'}><span aria-hidden="true">✔</span> 승인</button>
     <button class="btn danger" data-act="reject|${esc(s.id)}" aria-expanded="${!!(popover && popover.id === s.id && popover.kind === 'reject')}" ${a.approve ? '' : 'disabled'}><span aria-hidden="true">✖</span> 반려</button>
-    ${a.approve ? '' : `<div class="sub">터미널에서: <span class="mono">vigil approve ${esc(s.id)}</span></div>`}
+    ${a.approve ? '' : `<div class="sub">터미널에서: <span class="mono">vigil approve ${esc(s.id)}</span></div>`}` : ''}
     ${receipts[s.id] ? `<div class="sub receipt" role="status">${receipts[s.id]}</div>` : ''}</div>`;
 }
 
