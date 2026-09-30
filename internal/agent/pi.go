@@ -781,7 +781,7 @@ func agentEnv(cfg *config.Config, session, evidenceDir string) []string {
 	// The operator's own key and catalog win over the server's environment.
 	if cr := cfg.Agent.Credential; cr != nil {
 		if cr.EnvVar != "" && cr.APIKey != "" {
-			env = append(env, cr.EnvVar+"="+cr.APIKey)
+			env = setEnv(env, cr.EnvVar, cr.APIKey)
 		}
 
 	}
@@ -794,6 +794,19 @@ func agentEnv(cfg *config.Config, session, evidenceDir string) []string {
 		)
 	}
 	return env
+}
+
+// setEnv replaces key in env, or appends it. A duplicate would let envValue
+// (first match) and exec (last match) disagree on which value the child sees.
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, prefix) {
+			out = append(out, kv)
+		}
+	}
+	return append(out, prefix+value)
 }
 
 // envValue reads one variable out of a prepared environment slice.
