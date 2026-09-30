@@ -40,9 +40,18 @@ func (o *Orchestrator) AfterRun(ctx context.Context, job *model.Job, run *model.
 	if at.IsZero() {
 		at = o.now()
 	}
-	if sc.State == model.StatePendingApproval {
-		// A manual run of a script awaiting a human decision: keep the run and
-		// its metrics, but no promotion, quarantine, repair job or incident.
+	if !run.Outcome.IsInfrastructure() {
+		// The run reached the target, so the environment problem that opened the
+		// single ENVIRONMENT incident is gone. Nothing else would ever close it.
+		if err := o.st.ResolveIncidents(ctx, o.cfg.Project.ID, model.IncidentEnvironment, ""); err != nil {
+			return err
+		}
+	}
+	if sc.State == model.StatePendingApproval || sc.State.Inactive() {
+		// A manual run of a script awaiting a human decision, or one rejected
+		// while it ran: keep the run and its metrics, but no promotion,
+		// quarantine, repair job or incident. An inactive script has no Run
+		// button, so an incident opened here could never be re-checked.
 		if _, err := o.st.RecordScenarioOutcome(ctx, o.cfg.Project.ID, sc.ID, run.Outcome, at); err != nil {
 			return err
 		}

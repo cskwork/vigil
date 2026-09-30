@@ -123,6 +123,8 @@ $('q').value = queryRaw;
 let shownChecks = null, filterNote = '';
 // 이전 배포와 비교: 기본은 꺼짐이라 처음 오는 사람의 화면은 그대로입니다.
 let compare = false, prevLoading = false, prevErr = null;
+// 발견된 문제의 재확인: 열린 문제 id, 검사 관리와 같은 실행 옵션(/api/scripts), 진행 상태.
+let recheck = null, recheckOpts = null, recheckBusy = false, recheckErr = '';
 const prevCache = {}; // 배포 표시 -> 그 배포의 검증 결과 (5초 폴링마다 다시 받지 않습니다)
 
 // 업무 개요 화면에서 조건을 가지고 넘어오면 KPI 대신 검사 목록이 먼저 보여야 합니다.
@@ -184,8 +186,9 @@ function render() {
     <article class="kpi"><h3>${tip('배포 확인 시각', KT.dep)}</h3><div class="value">${dep ? hm(dep.first_seen) : '<small>없음</small>'}</div><p class="delta">${dep ? esc(ymd(dep.first_seen)) + ' · 검사 ' + dep.runs + '회' : ''}</p></article>`;
 
   const findingsNote = o.open_findings ? `<div class="sub" style="padding:0 0 6px">데이터 발견 사항 <span class="st st-warn"><i></i>미해결 ${o.open_findings}건</span> <span class="sub">(검사 관리 상세에서 확인, 터미널: <span class="mono">vigil findings</span>)</span></div>` : '';
-  $('issuesBody').innerHTML = findingsNote + (incs.length ? `<div class="agent-head"><b>발견된 문제 ${incs.length}건</b></div><table><caption class="sr-only">미해결 문제 목록</caption><tbody>${incs.map(i => `<tr><td class="t">${i.md_rel ? `<a href="/evidence/${esc(i.md_rel)}" target="_blank" rel="noopener">${esc(incTitle(i.title))}</a>` : esc(incTitle(i.title))}${causeHTML(i, 'inc' + i.id)}</td><td class="fit">${st(INCIDENT, i.kind)}</td><td class="hide-sm fit">${esc(i.created_at)} <span class="sub">(${ago(i.created_at)})</span></td></tr>`).join('')}</tbody></table>`
+  $('issuesBody').innerHTML = findingsNote + (incs.length ? `<div class="agent-head"><b>발견된 문제 ${incs.length}건</b></div><table><caption class="sr-only">미해결 문제 목록</caption><tbody>${incs.map(i => `<tr><td class="t">${i.md_rel ? `<a href="/evidence/${esc(i.md_rel)}" target="_blank" rel="noopener">${esc(incTitle(i.title))}</a>` : esc(incTitle(i.title))}${causeHTML(i, 'inc' + i.id)}</td><td class="fit">${st(INCIDENT, i.kind)}</td><td class="hide-sm fit">${esc(i.created_at)} <span class="sub">(${ago(i.created_at)})</span></td><td class="fit">${i.scenario ? `<button class="btn" data-recheck="${i.id}" aria-expanded="${recheck === i.id}">재확인</button>` : ''}</td></tr>${recheck === i.id ? `<tr class="pop-row"><td colspan="4">${recheckHTML(i)}</td></tr>` : ''}`).join('')}</tbody></table>`
     : `<div class="empty" style="padding:8px 0"><b>확인된 문제가 없습니다</b>문제가 확인되면 재현 절차와 증거가 여기에 정리됩니다.</div>`);
+  bindRecheck(incs);
 
   // 이전 배포는 배포 이력에서 지금 배포 바로 다음 줄입니다(최신이 위).
   const di = deps.findIndex(d => d.marker === marker);
@@ -295,6 +298,52 @@ function render() {
     const h = $('verify').querySelector('h2');
     if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); claimScroll(h, { block: 'start' }); }
   }
+}
+
+// 재확인은 검사 관리의 실행과 같은 요청을 보내고, 진행 상황은 검사 관리의
+// 실행 패널(?job=)에서 봅니다. 통과하면 서버가 이 문제를 해결로 닫습니다.
+const INACTIVE = ['EPHEMERAL', 'DUPLICATE', 'REJECTED', 'RETIRED', 'MERGED', 'SUPERSEDED']; // 검사 관리의 쓰지 않음
+function recheckHTML(i) {
+  if (recheckErr && !recheckOpts) return `<div class="pop warn" role="alert"><p>${esc(recheckErr)}</p><button class="btn" id="recheckCancel">닫기</button></div>`;
+  if (!recheckOpts) return '<div class="pop"><p class="sub">실행 옵션을 불러오고 있습니다…</p></div>';
+  const o = recheckOpts, sc = (o.scripts || []).find(s => s.id === i.scenario);
+  if (!sc) return `<div class="pop warn" role="alert"><p>이 문제의 검사(${esc(i.scenario)})를 찾지 못했습니다.</p><button class="btn" id="recheckCancel">닫기</button></div>`;
+  if (INACTIVE.includes(sc.state)) return `<div class="pop warn" role="alert"><p>이 검사는 쓰지 않는 상태라 재확인할 수 없습니다. <a href="${esc(projectURL('/scripts?state=ALL&id=' + encodeURIComponent(sc.id)))}">검사 관리에서 확인</a></p><button class="btn" id="recheckCancel">닫기</button></div>`;
+  const envs = o.envs || [];
+  return `<div class="pop" role="group" aria-label="문제 재확인">
+    <p class="sub">결함을 고친 뒤 같은 검사를 다시 실행합니다. 통과하면 이 문제는 해결로 닫힙니다.</p>
+    <label>환경 <select id="recheckEnv">${envs.map(e => `<option value="${esc(e)}"${e === o.default_env ? ' selected' : ''}>${esc(e)} · ${esc(o.env_urls?.[e] || '')}</option>`).join('')}</select></label>
+    <label>브라우저 <select id="recheckBrowser"><option value="lightpanda"${o.default_browser === 'lightpanda' ? ' selected' : ''}>${esc(BROWSER.lightpanda)}</option><option value="chromium"${o.default_browser === 'chromium' ? ' selected' : ''}>${esc(BROWSER.chromium)}</option></select></label>
+    <button class="btn primary" id="recheckGo"${recheckBusy ? ' disabled' : ''}>${recheckBusy ? '시작하는 중…' : '지금 실행'}</button>
+    <button class="btn" id="recheckCancel">취소</button>
+    ${recheckErr ? `<p class="sub" role="alert">${esc(recheckErr)}</p>` : ''}</div>`;
+}
+function bindRecheck(incs) {
+  document.querySelectorAll('#issuesBody button[data-recheck]').forEach(b => b.onclick = async () => {
+    const id = Number(b.dataset.recheck);
+    recheck = recheck === id ? null : id; recheckErr = '';
+    rerender(render);
+    if (recheck === null || recheckOpts) return;
+    try {
+      const r = await fetch('/api/scripts');
+      if (!r.ok) throw await httpFail(r, '실행 옵션을 불러오지 못했습니다.');
+      recheckOpts = await r.json();
+    } catch (e) { recheckErr = e.message; }
+    rerender(render);
+  });
+  const cancel = $('recheckCancel');
+  if (cancel) cancel.onclick = () => { const id = recheck; recheck = null; recheckErr = ''; rerender(render); document.querySelector(`#issuesBody button[data-recheck="${id}"]`)?.focus(); };
+  const go = $('recheckGo'), inc = incs.find(i => i.id === recheck);
+  if (go && inc) go.onclick = async () => {
+    const env = $('recheckEnv').value, browser = $('recheckBrowser').value;
+    recheckBusy = true; recheckErr = ''; rerender(render);
+    try {
+      const r = await fetch('/api/script/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: inc.scenario, env, browser }) });
+      if (!r.ok) throw await httpFail(r, '재확인을 시작하지 못했습니다.');
+      const body = await r.json();
+      location.href = projectURL(`/scripts?state=ALL&id=${encodeURIComponent(inc.scenario)}&job=${encodeURIComponent(body.job_id)}`);
+    } catch (e) { recheckErr = e.message; recheckBusy = false; rerender(render); }
+  };
 }
 
 const TABS = [['steps', '단계'], ['shots', '화면 캡처'], ['net', '서버 응답'], ['console', '콘솔']];

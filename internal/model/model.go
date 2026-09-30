@@ -24,6 +24,16 @@ const (
 	StateRetired         ScenarioState = "RETIRED"
 )
 
+// Inactive reports whether a script is out of use (duplicate, rejected, retired
+// and the like). The console lists these under 쓰지 않음 and offers no Run.
+func (s ScenarioState) Inactive() bool {
+	switch s {
+	case StateDuplicate, StateEphemeral, StateRejected, StateMerged, StateSuperseded, StateRetired:
+		return true
+	}
+	return false
+}
+
 // Outcome is the classified result of one run (PRD §13).
 type Outcome string
 
